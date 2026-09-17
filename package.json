@@ -1,0 +1,63 @@
+{
+  "name": "esmount-vod-downloader",
+  "productName": "Esmount VOD Downloader",
+  "version": "1.0.0",
+  "description": "Download Twitch VODs, or just part of one, with a friendly UI powered by twitch-dlp",
+  "author": "Esmount",
+  "private": true,
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/TrinityTF/esmount-vod-downloader.git"
+  },
+  "main": "src/main/main.js",
+  "scripts": {
+    "start": "electron .",
+    "icon": "electron scripts/make-icon.js",
+    "dist": "electron-builder --win --publish never",
+    "release": "electron-builder --win --publish always"
+  },
+  "dependencies": {
+    "electron-updater": "^6.8.9"
+  },
+  "devDependencies": {
+    "electron": "^44.4.1",
+    "electron-builder": "^26.15.3"
+  },
+  "build": {
+    "appId": "com.esmount.voddownloader",
+    "productName": "Esmount VOD Downloader",
+    "directories": {
+      "output": "dist",
+      "buildResources": "build"
+    },
+    "files": [
+      "src/**/*",
+      "build/icon.png",
+      "package.json"
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "build/icon.png"
+    },
+    "nsis": {
+      "oneClick": true,
+      "perMachine": false,
+      "createDesktopShortcut": "always",
+      "createStartMenuShortcut": true,
+      "shortcutName": "Esmount VOD Downloader",
+      "runAfterFinish": true,
+      "artifactName": "Esmount-VOD-Downloader-Setup-${version}.${ext}"
+    },
+    "publish": {
+      "provider": "github",
+      "releaseType": "release"
+    }
+  }
+}

@@ -1,0 +1,181 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data: https://static-cdn.jtvnw.net">
+  <title>Esmount VOD Downloader</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <svg class="sprite" aria-hidden="true">
+    <symbol id="i-download" viewBox="0 0 24 24"><path d="M12 4v11m-5-5 5 5 5-5M5 20h14"/></symbol>
+    <symbol id="i-folder" viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></symbol>
+    <symbol id="i-check" viewBox="0 0 24 24"><path d="m5 12.5 4.5 4.5L19 7.5"/></symbol>
+    <symbol id="i-x" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18"/></symbol>
+    <symbol id="i-alert" viewBox="0 0 24 24"><path d="M12 8v5m0 3.5v.01M10.3 3.9 2.6 17.5A2 2 0 0 0 4.3 20.5h15.4a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/></symbol>
+    <symbol id="i-refresh" viewBox="0 0 24 24"><path d="M20 11a8 8 0 0 0-14.8-3.5M4 4v4h4M4 13a8 8 0 0 0 14.8 3.5M20 20v-4h-4"/></symbol>
+    <symbol id="i-trash" viewBox="0 0 24 24"><path d="M4 7h16M10 11v6m4-6v6M6 7l1 12a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-12M9 7V4h6v3"/></symbol>
+    <symbol id="i-sparkle" viewBox="0 0 24 24"><path d="M12 3v4m0 10v4M3 12h4m10 0h4M6 6l2.5 2.5m7 7L18 18M6 18l2.5-2.5m7-7L18 6"/></symbol>
+    <symbol id="i-terminal" viewBox="0 0 24 24"><path d="m5 8 4 4-4 4m6 1h8"/></symbol>
+    <symbol id="i-copy" viewBox="0 0 24 24"><path d="M9 9h10v11H9zM5 15V4h10"/></symbol>
+    <symbol id="i-link" viewBox="0 0 24 24"><path d="M10 14a4.5 4.5 0 0 0 6.4 0l3-3a4.5 4.5 0 0 0-6.4-6.4l-1 1M14 10a4.5 4.5 0 0 0-6.4 0l-3 3a4.5 4.5 0 0 0 6.4 6.4l1-1"/></symbol>
+  </svg>
+
+  <header class="topbar">
+    <div class="brand">
+      <span class="logo" aria-hidden="true"><svg><use href="#i-download"/></svg></span>
+      <div>
+        <h1>Esmount VOD Downloader</h1>
+        <p>Save Twitch VODs, or just the part you want</p>
+      </div>
+    </div>
+    <div class="status-pill" id="status-pill" data-state="working"><span class="dot"></span><span id="status-text">Starting…</span></div>
+  </header>
+
+  <main class="layout">
+    <section class="column">
+      <div class="card setup-card" id="setup-card" hidden>
+        <div class="card-head">
+          <h2>Getting ready</h2>
+          <p class="muted" id="setup-subtitle">Downloading the tools the app needs. This only happens the first time.</p>
+        </div>
+        <ul class="setup-steps" id="setup-steps"></ul>
+        <div class="setup-error" id="setup-error" hidden>
+          <p id="setup-error-text"></p>
+          <button class="btn secondary" id="setup-retry" type="button"><svg><use href="#i-refresh"/></svg>Try again</button>
+        </div>
+      </div>
+
+      <form class="card form-card" id="download-form" novalidate autocomplete="off">
+        <div class="card-head">
+          <h2>New download</h2>
+        </div>
+
+        <div class="step">
+          <label class="step-label" for="url"><span class="step-num">1</span>VOD link</label>
+          <div class="input-icon">
+            <svg><use href="#i-link"/></svg>
+            <input id="url" type="text" placeholder="https://www.twitch.tv/videos/123456789" spellcheck="false">
+          </div>
+          <p class="hint" id="url-hint">Paste a link to a Twitch VOD (past broadcast, highlight or upload).</p>
+
+          <div class="video-card" id="video-card" hidden>
+            <div class="thumb">
+              <img id="video-thumb" alt="">
+              <span class="thumb-badge" id="video-length"></span>
+            </div>
+            <div class="video-meta">
+              <div class="video-title" id="video-title"></div>
+              <div class="video-sub" id="video-sub"></div>
+            </div>
+          </div>
+          <div class="video-card skeleton" id="video-skeleton" hidden>
+            <div class="thumb shimmer"></div>
+            <div class="video-meta"><div class="line shimmer"></div><div class="line short shimmer"></div></div>
+          </div>
+        </div>
+
+        <fieldset class="step" id="range-step" aria-labelledby="range-label" disabled>
+          <div class="step-row">
+            <div class="step-label" id="range-label"><span class="step-num">2</span>Part to download</div>
+            <button class="link-btn" id="whole-vod" type="button">Whole VOD</button>
+          </div>
+          <div class="time-fields">
+            <div class="time-field">
+              <label for="start">Start</label>
+              <input id="start" type="text" inputmode="numeric" value="0:00:00" spellcheck="false">
+            </div>
+            <span class="time-arrow" aria-hidden="true">→</span>
+            <div class="time-field">
+              <label for="end">End</label>
+              <input id="end" type="text" inputmode="numeric" placeholder="0:00:00" spellcheck="false">
+            </div>
+          </div>
+          <div class="dual-range" id="dual-range">
+            <div class="track"><div class="fill" id="range-fill"></div></div>
+            <input type="range" id="range-start" min="0" max="100" value="0" step="1" aria-label="Start time">
+            <input type="range" id="range-end" min="0" max="100" value="100" step="1" aria-label="End time">
+          </div>
+          <div class="range-scale"><span>0:00:00</span><span id="scale-end">0:00:00</span></div>
+          <p class="summary" id="range-summary"></p>
+          <p class="hint">Type times like <b>1:23:45</b>, <b>83:45</b> or <b>1h23m45s</b>. Cuts are accurate to about 10 seconds.</p>
+        </fieldset>
+
+        <fieldset class="step" id="quality-step" aria-labelledby="quality-label" disabled>
+          <div class="step-label" id="quality-label"><span class="step-num">3</span>Quality</div>
+          <div class="qualities" id="qualities" role="radiogroup">
+            <p class="placeholder">Paste a link to see the available qualities.</p>
+          </div>
+        </fieldset>
+
+        <div class="step">
+          <label class="step-label" for="dir"><span class="step-num">4</span>Save to</label>
+          <div class="folder-row">
+            <div class="input-icon">
+              <svg><use href="#i-folder"/></svg>
+              <input id="dir" type="text" spellcheck="false">
+            </div>
+            <button class="btn secondary" id="browse" type="button">Browse…</button>
+            <button class="btn icon-only" id="open-dir" type="button" title="Open this folder" aria-label="Open this folder"><svg><use href="#i-folder"/></svg></button>
+          </div>
+        </div>
+
+        <div class="command" id="command-preview" hidden>
+          <div class="command-head">
+            <span><svg><use href="#i-terminal"/></svg>Command that will run</span>
+            <button class="link-btn" id="copy-command" type="button">Copy</button>
+          </div>
+          <code id="command-text"></code>
+        </div>
+
+        <p class="form-error" id="form-error" role="alert" hidden></p>
+        <button class="btn primary big" id="submit" type="submit" disabled>
+          <svg><use href="#i-download"/></svg><span id="submit-text">Download</span>
+        </button>
+      </form>
+    </section>
+
+    <section class="column">
+      <div class="card jobs-card">
+        <div class="card-head row">
+          <h2>Downloads <span class="count" id="jobs-count" hidden></span></h2>
+          <button class="link-btn" id="clear-finished" type="button" hidden>Clear finished</button>
+        </div>
+        <div class="empty" id="jobs-empty">
+          <div class="empty-art"><svg><use href="#i-download"/></svg></div>
+          <p><b>No downloads yet</b></p>
+          <p class="muted">Paste a VOD link, pick the part and quality, and hit Download.</p>
+        </div>
+        <div class="jobs" id="jobs"></div>
+      </div>
+    </section>
+  </main>
+
+  <footer class="footer">
+    <span id="footer-version"></span>
+    <span class="sep">·</span>
+    <span id="footer-tools"></span>
+    <span class="sep">·</span>
+    <span id="footer-update"></span>
+  </footer>
+
+  <dialog class="dialog" id="update-dialog">
+    <div class="dialog-icon"><svg><use href="#i-sparkle"/></svg></div>
+    <h2>Update available</h2>
+    <p class="muted" id="update-text">A new version of Esmount VOD Downloader is ready. Update now?</p>
+    <ul class="changes" id="update-changes"></ul>
+    <div class="progress" id="update-progress" hidden><div class="bar"></div></div>
+    <p class="form-error" id="update-error" hidden></p>
+    <div class="dialog-actions">
+      <button class="btn secondary" id="update-later" type="button">Not now</button>
+      <button class="btn primary" id="update-now" type="button"><svg><use href="#i-download"/></svg><span>Update now</span></button>
+    </div>
+  </dialog>
+
+  <div class="toast" id="toast" role="status" hidden></div>
+
+  <script src="app.js"></script>
+</body>
+</html>
