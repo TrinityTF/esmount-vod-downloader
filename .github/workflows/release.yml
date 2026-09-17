@@ -37,6 +37,7 @@ jobs:
         run: node scripts/prepare-release.js ${{ github.run_number }}
 
       - name: Build installer and publish release
+        shell: bash
         run: npx electron-builder --win --publish always -c.publish.owner=${{ github.repository_owner }} -c.publish.repo=${{ github.event.repository.name }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
