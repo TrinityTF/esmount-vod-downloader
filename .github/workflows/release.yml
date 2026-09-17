@@ -36,8 +36,18 @@ jobs:
       - name: Set version and release notes
         run: node scripts/prepare-release.js ${{ github.run_number }}
 
-      - name: Build installer and publish release
+      # Uploads the installer, blockmap and latest.yml into a draft release...
+      - name: Build installer
         shell: bash
-        run: npx electron-builder --win --publish always -c.publish.owner=${{ github.repository_owner }} -c.publish.repo=${{ github.event.repository.name }}
+        run: npx electron-builder --win --publish always
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # ...and only then publishes it, so the app never sees a half-uploaded release.
+      - name: Publish release
+        shell: bash
+        run: |
+          version="$(node -p "require('./package.json').version")"
+          gh release edit "v$version" --draft=false --latest --target "$GITHUB_SHA" --notes-file build/release-notes.md
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
