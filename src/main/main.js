@@ -6,6 +6,8 @@ const { app, BrowserWindow, Notification, clipboard, dialog, ipcMain, nativeThem
 const P = require('./paths');
 
 const APP_ID = 'com.esmount.voddownloader';
+// An end time this close to a live broadcast's edge counts as "as far as it goes".
+const LIVE_EDGE_MARGIN = 60;
 app.setPath('userData', P.DATA);
 app.setAppUserModelId(APP_ID);
 
@@ -146,7 +148,14 @@ function start() {
     if (!Number.isFinite(start) || start < 0) throw new Error('The start time is not valid.');
     if (end !== null && (!Number.isFinite(end) || end <= start)) throw new Error('The end time must be after the start time.');
     if (video.duration && start >= video.duration) throw new Error('The start time is after the end of the VOD.');
-    if (video.duration && end !== null && end >= video.duration) end = null;
+    if (video.duration && end !== null && end >= video.duration) end = null; // null = "to the end"
+
+    // twitch-dlp cannot cut exactly at the live edge (the stream hasn't reached that
+    // timestamp yet, so it would select nothing). Downloads that end there run without an
+    // end time; the app either follows the broadcast or stops once it has caught up.
+    const atLiveEdge = Boolean(video.isLive) && (end === null || end >= video.duration - LIVE_EDGE_MARGIN);
+    if (atLiveEdge) end = null;
+    const followLive = atLiveEdge && Boolean(options.followLive);
 
     const dir = String(options.dir || '').trim();
     if (!dir || !path.isAbsolute(dir)) throw new Error('Please choose a download folder.');
@@ -171,6 +180,9 @@ function start() {
       formatLabel: format.label,
       isBest: format === formats[0],
       dir,
+      isLive: video.isLive,
+      followLive,
+      stopAtLiveEdge: atLiveEdge && !followLive,
     };
   }
 
@@ -187,6 +199,8 @@ function start() {
       return downloads.create(download);
     },
     'download:cancel': (id) => downloads.cancel(id),
+    'download:stop-and-save': (id) => downloads.cancel(id, { save: true }),
+    'download:save-parts': (id) => downloads.saveParts(id),
     'download:retry': (id) => downloads.retry(id),
     'download:remove': (id) => downloads.remove(id),
     'download:clear-finished': () => downloads.clearFinished(),

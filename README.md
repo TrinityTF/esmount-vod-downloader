@@ -38,7 +38,16 @@ Nothing is installed system-wide. Downloads are checked against their published 
 3. **Quality** – every quality Twitch offers for that VOD, with the source quality first.
 4. **Save to** – any folder. The program remembers your last folder and quality.
 
-Downloads run one at a time. Extra ones wait in a queue. If you stop a download, starting the same one again continues where it left off.
+Downloads run one at a time. Extra ones wait in a queue. If you stop a download, you can either save what was downloaded as a video, or start it again to continue where it left off.
+
+### Streams that are still live
+
+A VOD of a broadcast that is still going keeps growing, so when the end is set as far as it goes, the program asks what should happen:
+
+- **Stop at the current length** – downloads everything streamed so far and stops as soon as it catches up.
+- **Keep downloading while it stays live** – keeps recording the stream. Press **Stop & save** whenever you want, and the parts downloaded so far are joined into a playable video.
+
+Either way you get a finished `.mp4`. A time range that ends before the live edge behaves like any other download.
 
 ## Updates
 

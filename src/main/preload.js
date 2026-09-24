@@ -26,6 +26,8 @@ contextBridge.exposeInMainWorld('esmount', {
   previewCommand: (options) => call('download:preview', options),
   startDownload: (options) => call('download:start', options),
   cancelDownload: (id) => call('download:cancel', id),
+  stopAndSaveDownload: (id) => call('download:stop-and-save', id),
+  saveDownloadedParts: (id) => call('download:save-parts', id),
   retryDownload: (id) => call('download:retry', id),
   removeDownload: (id) => call('download:remove', id),
   clearFinished: () => call('download:clear-finished'),

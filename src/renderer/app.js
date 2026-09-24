@@ -124,6 +124,7 @@ function resetVideo() {
   Object.assign(ui, { video: null, formats: null, format: null, loadingId: null, duration: 0, start: 0, end: 0 });
   $('video-card').hidden = true;
   $('video-skeleton').hidden = true;
+  $('live-choice').hidden = true;
   renderQualitiesMessage('Paste a link to see the available qualities.');
   $('range-summary').textContent = '';
   updateForm();
@@ -147,7 +148,9 @@ function onUrlChanged() {
 async function loadVideo(url, id) {
   const token = ++ui.loadToken;
   Object.assign(ui, { video: null, formats: null, format: null, loadingId: id });
+  document.querySelector('input[name="live-mode"][value="stop"]').checked = true;
   $('video-card').hidden = true;
+  $('live-choice').hidden = true;
   $('video-skeleton').hidden = false;
   setUrlHint('Looking up the VOD…');
   renderQualitiesLoading();
@@ -191,6 +194,7 @@ function renderVideo(video) {
   const thumb = $('video-thumb');
   thumb.hidden = !video.thumbnail;
   if (video.thumbnail) thumb.src = video.thumbnail;
+  $('video-live').hidden = !video.isLive;
   $('video-length').textContent = clock(video.duration);
   $('video-title').textContent = video.title;
   const date = video.createdAt ? new Date(video.createdAt).toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' }) : '';
@@ -220,8 +224,37 @@ function setRange(start, end) {
   const pct = (v) => (ui.duration ? (v / ui.duration) * 100 : 0);
   $('range-fill').style.left = `${pct(start)}%`;
   $('range-fill').style.right = `${100 - pct(end)}%`;
+  updateLiveChoice();
   renderSummary();
   updateForm();
+}
+
+// ---------------------------------------------------------------- still-live broadcasts
+
+/** The end is "as far as it goes", so a live broadcast leaves a choice to make. */
+const endIsAtMax = () => ui.end >= ui.duration;
+const isLiveChoice = () => Boolean(ui.video?.isLive) && endIsAtMax();
+const followLive = () => isLiveChoice() && document.querySelector('input[name="live-mode"]:checked')?.value === 'follow';
+
+function updateLiveChoice() {
+  $('live-choice').hidden = !isLiveChoice();
+  $('live-stop-time').textContent = clock(ui.duration);
+}
+
+/** A live VOD keeps growing, so refresh its length while it is on screen. */
+async function refreshLiveVideo() {
+  if (!ui.video?.isLive || ui.submitting) return;
+  const token = ui.loadToken;
+  const video = await api.getVideo(ui.video.url).catch(() => null);
+  if (!video || token !== ui.loadToken || !ui.video) return;
+  ui.video = { ...video, start: ui.video.start };
+  renderVideo(ui.video);
+  if (video.duration === ui.duration) return;
+  const keepEndAtMax = endIsAtMax();
+  ui.duration = video.duration;
+  for (const id of ['range-start', 'range-end']) $(id).max = String(video.duration);
+  $('scale-end').textContent = clock(video.duration);
+  setRange(ui.start, keepEndAtMax ? video.duration : Math.min(ui.end, video.duration));
 }
 
 /** Applies a typed time. Returns false if it is not usable. */
@@ -248,9 +281,17 @@ function applyTypedTime(which, { final }) {
 
 function renderSummary() {
   if (!ui.video) return ($('range-summary').textContent = '');
+  if (followLive()) {
+    $('range-summary').textContent =
+      ui.start === 0
+        ? 'Whole VOD, and it keeps recording while the stream is live'
+        : `From ${clock(ui.start)}, and it keeps recording while the stream is live`;
+    return;
+  }
   const length = ui.end - ui.start;
-  const whole = ui.start === 0 && ui.end >= ui.duration;
-  let text = whole ? `Whole VOD · ${clock(length)}` : `${clock(ui.start)} → ${clock(ui.end)} · ${clock(length)} long`;
+  const whole = ui.start === 0 && endIsAtMax();
+  const soFar = whole && ui.video.isLive;
+  let text = whole ? `${soFar ? 'Whole VOD so far' : 'Whole VOD'} · ${clock(length)}` : `${clock(ui.start)} → ${clock(ui.end)} · ${clock(length)} long`;
   const format = selectedFormat();
   if (format?.kbps) text += ` · about ${formatBytes(((format.kbps * 1024) / 8) * length)}`;
   $('range-summary').textContent = text;
@@ -315,9 +356,10 @@ function formOptions() {
   return {
     url: $('url').value.trim(),
     start: ui.start,
-    end: ui.end >= ui.duration ? null : ui.end,
+    end: endIsAtMax() ? null : ui.end,
     format: ui.format,
     dir: $('dir').value.trim(),
+    followLive: followLive(),
   };
 }
 
@@ -507,13 +549,21 @@ function createJobCard(job) {
 function jobActions(job) {
   const buttons = [];
   if (ACTIVE.includes(job.status)) {
-    buttons.push(button(job.status === 'queued' ? 'Remove from queue' : 'Stop', 'danger', () => api.cancelDownload(job.id), 'x'));
+    if (job.status === 'queued') return [button('Remove from queue', 'danger', () => api.cancelDownload(job.id), 'x')];
+    // A live recording has no natural end, so stopping it has to save the video too.
+    if (job.followLive && job.status !== 'merging') {
+      buttons.push(button('Stop & save', 'secondary', () => api.stopAndSaveDownload(job.id), 'check'));
+    }
+    buttons.push(button('Stop', 'danger', () => api.cancelDownload(job.id), 'x'));
     return buttons;
   }
   if (job.status === 'done') buttons.push(button('Show in folder', 'secondary', () => api.showDownload(job.id), 'folder'));
   if (job.status === 'error') buttons.push(button('Try again', 'secondary', () => api.retryDownload(job.id), 'refresh'));
   if (job.status === 'cancelled') buttons.push(button(job.hasParts ? 'Resume' : 'Start again', 'secondary', () => api.retryDownload(job.id), 'refresh'));
-  if (job.hasParts) buttons.push(button('Delete partial files', 'danger', () => api.deleteParts(job.id), 'trash'));
+  if (job.hasParts) {
+    buttons.push(button('Save what was downloaded', 'secondary', () => api.saveDownloadedParts(job.id), 'check'));
+    buttons.push(button('Delete partial files', 'danger', () => api.deleteParts(job.id), 'trash'));
+  }
   buttons.push(button('Remove', 'secondary', () => api.removeDownload(job.id)));
   return buttons;
 }
@@ -526,22 +576,30 @@ function updateJobCard(card, job) {
   r.title.title = job.title;
 
   const whole = job.start === 0 && job.end === null;
-  const range = whole ? 'Whole VOD' : `${clock(job.start)} → ${job.end === null ? clock(job.duration) : clock(job.end)}`;
+  const range = job.followLive
+    ? `${job.start === 0 ? 'Whole VOD' : clock(job.start)} → while live`
+    : whole
+      ? 'Whole VOD'
+      : `${clock(job.start)} → ${job.end === null ? clock(job.duration) : clock(job.end)}`;
   r.sub.textContent = [job.channel, range, job.formatLabel].join(' · ');
 
-  const [label, iconName] = STATUS_LABELS[job.status] || [job.status, null];
-  r.chip.dataset.status = job.status;
-  r.chip.replaceChildren(...(iconName ? [icon(iconName)] : []), label);
+  const recording = job.followLive && ['downloading', 'preparing'].includes(job.status);
+  const [label, iconName] = recording ? ['Recording live', null] : STATUS_LABELS[job.status] || [job.status, null];
+  r.chip.dataset.status = recording ? 'live' : job.status;
+  r.chip.replaceChildren(...(recording ? [el('span', 'live-dot')] : iconName ? [icon(iconName)] : []), label);
 
   const showBar = ['preparing', 'downloading', 'merging', 'done'].includes(job.status);
   r.progress.hidden = !showBar;
-  r.progress.classList.toggle('indeterminate', job.status === 'preparing' || (job.status === 'merging' && !job.progress));
+  r.progress.classList.toggle('indeterminate', job.status === 'preparing' || recording || (job.status === 'merging' && !job.progress));
   r.progress.classList.toggle('done', job.status === 'done');
   r.bar.style.width = `${Math.round((job.status === 'done' ? 1 : job.progress) * 100)}%`;
 
   let left = '';
   let right = '';
-  if (job.status === 'downloading' && job.stats) {
+  if (recording && job.stats) {
+    left = `${job.stats.parts.split('/')[0]} parts · ~${prettySize(job.stats.size)}`;
+    right = prettySize(job.stats.speed);
+  } else if (job.status === 'downloading' && job.stats) {
     left = `${Math.floor(job.progress * 100)}% · of ~${prettySize(job.stats.size)}`;
     right = `${prettySize(job.stats.speed)} · ${job.stats.eta} left`;
   } else if (job.status === 'merging') {
@@ -553,12 +611,17 @@ function updateJobCard(card, job) {
   r.statsRight.textContent = right;
   r.stats.hidden = !left && !right;
 
-  const text = job.status === 'error' ? job.error : job.status === 'done' ? job.fileName : job.message;
+  const text =
+    job.status === 'error'
+      ? job.error
+      : job.status === 'done'
+        ? `${job.savedEarly ? 'Saved what was downloaded · ' : ''}${job.fileName}`
+        : job.message;
   r.message.textContent = text || '';
   r.message.hidden = !text;
   r.message.className = `job-message${job.status === 'error' ? ' error' : job.status === 'done' ? ' success' : ''}`;
 
-  const key = `${job.status}|${job.hasParts}`;
+  const key = `${job.status}|${job.hasParts}|${job.followLive}`;
   if (r.actionsKey !== key) {
     r.actionsKey = key;
     r.actions.replaceChildren(...jobActions(job));
@@ -718,6 +781,13 @@ function init() {
     $(id).addEventListener('keydown', (e) => e.key === 'Enter' && (e.preventDefault(), $(id).blur()));
   }
   $('whole-vod').addEventListener('click', () => setRange(0, ui.duration));
+  for (const radio of document.querySelectorAll('input[name="live-mode"]')) {
+    radio.addEventListener('change', () => {
+      renderSummary();
+      updateForm();
+    });
+  }
+  setInterval(refreshLiveVideo, 45000);
 
   $('browse').addEventListener('click', async () => {
     const dir = await api.pickFolder($('dir').value.trim()).catch((err) => toast(err.message));

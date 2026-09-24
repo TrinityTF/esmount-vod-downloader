@@ -6,7 +6,7 @@ const tools = require('./tools');
 const GQL_CLIENT_ID = 'kimne78kx3ncx6brgo4mv6wki5h1ko';
 const VIDEO_QUERY = `query VideoInfo($id: ID!) {
   video(id: $id) {
-    id title lengthSeconds createdAt broadcastType
+    id title lengthSeconds createdAt broadcastType status
     previewThumbnailURL(width: 640, height: 360)
     owner { login displayName }
     game { displayName }
@@ -29,6 +29,7 @@ function parseVodUrl(input) {
 
 const cache = new Map(); // id -> { at, info }
 const CACHE_MS = 10 * 60 * 1000;
+const LIVE_CACHE_MS = 30 * 1000;
 
 async function fetchMetadata(id) {
   const res = await fetch('https://gql.twitch.tv/gql', {
@@ -51,6 +52,8 @@ async function fetchMetadata(id) {
     duration: Number(video.lengthSeconds) || 0,
     createdAt: video.createdAt,
     type: video.broadcastType,
+    // "RECORDING" means the broadcast is still going, so the VOD keeps growing.
+    isLive: video.status === 'RECORDING',
     thumbnail: video.previewThumbnailURL && !video.previewThumbnailURL.includes('404_processing') ? video.previewThumbnailURL : null,
   };
 }
@@ -115,10 +118,10 @@ async function fetchFormats(url) {
   return formats.reverse();
 }
 
-/** Caches successful results of fn(key) for a few minutes, sharing in-flight requests. */
-function cached(key, fn) {
+/** Caches successful results of fn(key) for a while, sharing in-flight requests. */
+function cached(key, fn, maxAge = CACHE_MS) {
   const hit = cache.get(key);
-  if (hit && (!hit.at || Date.now() - hit.at < CACHE_MS)) return hit.promise;
+  if (hit && (!hit.at || Date.now() - hit.at < maxAge)) return hit.promise;
   const entry = { at: 0, promise: null };
   entry.promise = fn().then(
     (value) => {
@@ -143,7 +146,12 @@ function requireVod(input) {
 /** Title, channel, duration, thumbnail… plus the start time if the link had ?t=. */
 async function getVideo(input) {
   const parsed = requireVod(input);
-  const meta = await cached(`meta:${parsed.id}`, () => fetchMetadata(parsed.id));
+  const key = `meta:${parsed.id}`;
+  // A live VOD grows, so its length is only cached briefly.
+  const wasLive = cache.get(key)?.live;
+  const meta = await cached(key, () => fetchMetadata(parsed.id), wasLive ? LIVE_CACHE_MS : CACHE_MS);
+  const entry = cache.get(key);
+  if (entry) entry.live = meta.isLive;
   return { ...meta, start: parsed.start };
 }
 

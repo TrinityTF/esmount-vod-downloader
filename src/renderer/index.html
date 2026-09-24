@@ -64,6 +64,7 @@
           <div class="video-card" id="video-card" hidden>
             <div class="thumb">
               <img id="video-thumb" alt="">
+              <span class="live-badge" id="video-live" hidden><span class="live-dot"></span>LIVE</span>
               <span class="thumb-badge" id="video-length"></span>
             </div>
             <div class="video-meta">
@@ -100,6 +101,19 @@
           </div>
           <div class="range-scale"><span>0:00:00</span><span id="scale-end">0:00:00</span></div>
           <p class="summary" id="range-summary"></p>
+
+          <div class="live-choice" id="live-choice" hidden>
+            <div class="live-choice-head"><span class="live-dot"></span>This broadcast is still live. What should happen at the end?</div>
+            <label class="live-option">
+              <input type="radio" name="live-mode" value="stop" checked>
+              <span><b>Stop at <span id="live-stop-time">0:00:00</span></b><small>Everything streamed so far. The download stops as soon as it catches up.</small></span>
+            </label>
+            <label class="live-option">
+              <input type="radio" name="live-mode" value="follow">
+              <span><b>Keep downloading while it stays live</b><small>Records the rest of the stream. You can stop and save it any time.</small></span>
+            </label>
+          </div>
+
           <p class="hint">Type times like <b>1:23:45</b>, <b>83:45</b> or <b>1h23m45s</b>. Cuts are accurate to about 10 seconds.</p>
         </fieldset>
 

@@ -10,6 +10,8 @@ const U = require('./util');
 const tools = require('./tools');
 
 const MAX_LOG_LINES = 500;
+// Anything smaller than this holds no video, however short the clip is.
+const MIN_VIDEO_BYTES = 16 * 1024;
 const ACTIVE = new Set(['queued', 'preparing', 'downloading', 'merging']);
 const PROGRESS_REGEX = /\[download\]\s+([\d.,]+)%\s+of\s+~\s*(\S+)\s+at\s+(\S+)\s+ETA\s+(\S+)\s+\(frag\s+(\d+)\/(\d+)\)/;
 const FFMPEG_TIME_REGEX = /\btime=(\d+):(\d+):(\d+(?:\.\d+)?)/;
@@ -33,7 +35,8 @@ function addLog(job, line) {
 
 // ---------------------------------------------------------------- naming & command
 
-const isWholeVod = (o) => o.start <= 0 && (o.end == null || o.end >= o.duration);
+// end === null means "no end": the rest of the VOD, and for a live one everything it keeps recording.
+const isWholeVod = (o) => o.start <= 0 && o.end == null;
 const clipLength = (job) => Math.max(1, (job.end == null ? job.duration : job.end) - job.start);
 
 function baseName(o) {
@@ -57,8 +60,7 @@ function chooseFileName(dir, base) {
 
 function sectionArg(o) {
   if (isWholeVod(o)) return null;
-  const end = o.end == null || o.end >= o.duration ? 'inf' : U.formatClock(o.end);
-  return `*${U.formatClock(o.start)}-${end}`;
+  return `*${U.formatClock(o.start)}-${o.end == null ? 'inf' : U.formatClock(o.end)}`;
 }
 
 function buildCommand(o, outputPath) {
@@ -76,10 +78,46 @@ function previewCommand(o) {
 
 // ---------------------------------------------------------------- running
 
+/** The leftovers twitch-dlp keeps next to the output: parts, playlist, log, ffconcat list. */
 async function partFiles(job) {
   if (!job.fileName) return [];
   const entries = await fsp.readdir(job.dir).catch(() => []);
   return entries.filter((e) => e.startsWith(`${job.fileName}.part-`) || e.startsWith(`${job.fileName}-`));
+}
+
+async function removePartFiles(job) {
+  for (const file of await partFiles(job)) await fsp.rm(path.join(job.dir, file), { force: true }).catch(() => {});
+}
+
+/** Runs a twitch-dlp command line, feeding its output to the UI. Returns the exit code. */
+async function runCommand(job, command, onLine) {
+  const internal = internals.get(job.id);
+  job.command = command;
+  emit();
+  addLog(job, `${job.dir}> ${command}`);
+  const child = U.spawnCommand(command, { cwd: job.dir, env: tools.commandEnv() });
+  internal.child = child;
+  U.onLines(child.stdout, onLine);
+  U.onLines(child.stderr, onLine);
+  const exitCode = await new Promise((resolve) => {
+    child.on('error', (err) => {
+      onLine(`ERROR: ${err.message}`);
+      resolve(-1);
+    });
+    child.on('close', (code) => resolve(code ?? -1));
+  });
+  internal.child = null;
+  addLog(job, `Command finished with exit code ${exitCode}`);
+  return exitCode;
+}
+
+/** Recognises the problems twitch-dlp and npx report, so the user gets a plain message. */
+function readErrorLine(line) {
+  if (/^ERROR:/i.test(line)) return line.replace(/^ERROR:\s*/i, '');
+  if (/might be private/i.test(line)) return 'This VOD seems to be private, deleted, or sub-only.';
+  if (/merging failed/i.test(line)) return 'Joining the video parts failed. See the output for details.';
+  if (/^npm (error|ERR!)/i.test(line)) return 'npx could not run twitch-dlp. See the output for details.';
+  return null;
 }
 
 async function runJob(job) {
@@ -91,21 +129,16 @@ async function runJob(job) {
   if (internal.cancelRequested) return finishCancelled(job);
 
   await fsp.mkdir(job.dir, { recursive: true });
-  job.fileName = chooseFileName(job.dir, baseName(job));
+  job.fileName ||= chooseFileName(job.dir, baseName(job));
   const outputPath = path.join(job.dir, job.fileName);
   if (isUnfinished(job.dir, job.fileName)) {
     // Resuming: remove a half-joined file from last time (ffmpeg won't overwrite it). Parts are kept.
     await fsp.rm(outputPath, { force: true });
   }
+  if (internal.saveOnly) return saveDownloadedParts(job, outputPath);
 
-  job.command = buildCommand(job, outputPath);
   job.message = 'Contacting Twitch…';
-  emit();
-  addLog(job, `${job.dir}> ${job.command}`);
-
   let errorMessage = null;
-  const child = U.spawnCommand(job.command, { cwd: job.dir, env: tools.commandEnv() });
-  internal.child = child;
 
   const onLine = (line) => {
     const progress = line.match(PROGRESS_REGEX);
@@ -115,7 +148,7 @@ async function runJob(job) {
       job.progress = Number(total) ? Number(done) / Number(total) : 0;
       job.stats = { size, speed, eta, parts: `${done}/${total}` };
       job.message = '';
-      if (Number(total) && done === total) {
+      if (Number(total) && done === total && !job.followLive) {
         job.status = 'merging';
         job.progress = 0;
         job.message = 'Joining the parts into one video…';
@@ -130,35 +163,41 @@ async function runJob(job) {
     }
 
     addLog(job, line);
-    if (/^ERROR:/i.test(line)) errorMessage = line.replace(/^ERROR:\s*/i, '');
-    else if (/might be private/i.test(line)) errorMessage = 'This VOD seems to be private, deleted, or sub-only.';
-    else if (/merging failed/i.test(line)) errorMessage = 'Joining the video parts failed. See the output for details.';
-    else if (/^npm (error|ERR!)/i.test(line) && !errorMessage) errorMessage = 'npx could not run twitch-dlp. See the output for details.';
-    else if (/^(Input #0|ffmpeg version)/.test(line) && job.status !== 'merging') {
+    errorMessage = readErrorLine(line) || errorMessage;
+    if (/VOD ONLINE|waiting for new fragments/i.test(line)) {
+      // Everything streamed so far has been downloaded.
+      if (job.stopAtLiveEdge && !internal.saveRequested) {
+        addLog(job, 'Caught up with the live broadcast - saving the video.');
+        cancel(job.id, { save: true });
+      } else {
+        job.message = 'Waiting for the stream to go on…';
+      }
+      emit();
+    } else if (/^(Input #0|ffmpeg version)/.test(line) && job.status !== 'merging') {
       Object.assign(job, { status: 'merging', progress: 0, message: 'Joining the parts into one video…' });
       emit();
     }
   };
-  U.onLines(child.stdout, onLine);
-  U.onLines(child.stderr, onLine);
 
-  const exitCode = await new Promise((resolve) => {
-    child.on('error', (err) => {
-      errorMessage ??= err.message;
-      resolve(-1);
-    });
-    child.on('close', (code) => resolve(code ?? -1));
-  });
-  internal.child = null;
-  addLog(job, `Command finished with exit code ${exitCode}`);
+  const exitCode = await runCommand(job, buildCommand(job, outputPath), onLine);
+
+  if (internal.saveRequested) return saveDownloadedParts(job, outputPath);
   if (internal.cancelRequested) return finishCancelled(job);
 
   const output = await fsp.stat(outputPath).catch(() => null);
-  if (errorMessage || !output?.size || isUnfinished(job.dir, job.fileName)) {
+  const empty = output && output.size < MIN_VIDEO_BYTES;
+  if (empty) await fsp.rm(outputPath, { force: true }).catch(() => {});
+  if (errorMessage || !output?.size || empty || isUnfinished(job.dir, job.fileName)) {
     Object.assign(job, {
       status: 'error',
       message: '',
-      error: errorMessage || (exitCode ? `The command stopped with exit code ${exitCode}.` : 'The download did not finish. See the output for details.'),
+      error:
+        errorMessage ||
+        (empty
+          ? 'Nothing was downloaded for that part of the VOD. Try again, or pick a slightly earlier end time.'
+          : exitCode
+            ? `The command stopped with exit code ${exitCode}.`
+            : 'The download did not finish. See the output for details.'),
       hasParts: (await partFiles(job)).length > 0,
     });
     return;
@@ -166,10 +205,66 @@ async function runJob(job) {
   Object.assign(job, { status: 'done', progress: 1, message: '', outputPath, size: output.size, hasParts: false });
 }
 
+/**
+ * Joins the parts downloaded so far into a playable video, without downloading more.
+ * Used when a live recording is stopped, or to rescue an interrupted download.
+ */
+async function saveDownloadedParts(job, outputPath) {
+  const internal = internals.get(job.id);
+  internal.saveRequested = false;
+  internal.saveOnly = false;
+  Object.assign(job, {
+    status: 'merging',
+    progress: 0,
+    stats: null,
+    error: null,
+    message: job.stopAtLiveEdge ? 'Joining the parts into one video…' : 'Saving what has been downloaded…',
+  });
+  emit();
+
+  if ((await partFiles(job)).every((file) => !file.includes('.part-Frag'))) {
+    Object.assign(job, { status: 'error', message: '', error: 'There are no downloaded parts to save.', hasParts: false });
+    return;
+  }
+  await fsp.rm(outputPath, { force: true }); // ffmpeg refuses to overwrite
+
+  let errorMessage = null;
+  const onLine = (line) => {
+    if (FFMPEG_TIME_REGEX.test(line)) return;
+    addLog(job, line);
+    errorMessage = readErrorLine(line) || errorMessage;
+  };
+  const exitCode = await runCommand(job, tools.twitchDlpCommand([outputPath, '--merge-fragments']), onLine);
+
+  const output = await fsp.stat(outputPath).catch(() => null);
+  if (errorMessage || !output?.size || output.size < MIN_VIDEO_BYTES) {
+    Object.assign(job, {
+      status: 'error',
+      message: '',
+      error: errorMessage || `Saving the downloaded parts failed (exit code ${exitCode}).`,
+      hasParts: (await partFiles(job)).length > 0,
+    });
+    return;
+  }
+  // --merge-fragments keeps the parts, so clean them up now that the video is saved.
+  await removePartFiles(job);
+  Object.assign(job, {
+    status: 'done',
+    progress: 1,
+    message: '',
+    outputPath,
+    size: output.size,
+    hasParts: false,
+    savedEarly: !job.stopAtLiveEdge,
+  });
+}
+
 async function finishCancelled(job) {
   job.status = 'cancelled';
-  job.hasParts = (await partFiles(job)).length > 0;
-  job.message = job.hasParts ? 'Stopped. Start the same download again to continue where it left off.' : 'Stopped.';
+  job.hasParts = (await partFiles(job)).some((file) => file.includes('.part-Frag'));
+  job.message = job.hasParts
+    ? 'Stopped. Save what was downloaded, or start it again to continue where it left off.'
+    : 'Stopped.';
 }
 
 async function pump() {
@@ -208,6 +303,9 @@ function create(o) {
     formatLabel: o.formatLabel,
     isBest: o.isBest,
     dir: o.dir,
+    isLive: Boolean(o.isLive),
+    followLive: Boolean(o.followLive),
+    stopAtLiveEdge: Boolean(o.stopAtLiveEdge),
     command: null,
     fileName: null,
     outputPath: null,
@@ -218,17 +316,19 @@ function create(o) {
     message: '',
     error: null,
     hasParts: false,
+    savedEarly: false,
     createdAt: Date.now(),
     finishedAt: null,
   };
-  internals.set(job.id, { log: [], child: null, cancelRequested: false });
+  internals.set(job.id, { log: [], child: null, cancelRequested: false, saveRequested: false, saveOnly: false });
   jobs.push(job);
   emit();
   pump();
   return job;
 }
 
-async function cancel(id) {
+/** Stops a running download. With { save: true } the parts downloaded so far become a video. */
+async function cancel(id, { save = false } = {}) {
   const job = find(id);
   if (!job || !isActive(job)) return;
   const internal = internals.get(id);
@@ -236,10 +336,22 @@ async function cancel(id) {
     Object.assign(job, { status: 'cancelled', message: 'Removed from the queue.' });
     return emit();
   }
-  internal.cancelRequested = true;
-  job.message = 'Stopping…';
+  if (save) internal.saveRequested = true;
+  else internal.cancelRequested = true;
+  job.message = save ? 'Stopping and saving…' : 'Stopping…';
   emit();
   if (internal.child) await U.killTree(internal.child.pid);
+}
+
+/** Joins the parts of a stopped or failed download into a playable video. */
+function saveParts(id) {
+  const job = find(id);
+  if (!job || isActive(job) || !job.hasParts) return;
+  internals.get(id).saveOnly = true;
+  internals.get(id).cancelRequested = false;
+  Object.assign(job, { status: 'queued', progress: 0, stats: null, error: null, message: 'Waiting to save…', finishedAt: null });
+  emit();
+  pump();
 }
 
 async function cancelAll() {
@@ -249,8 +361,8 @@ async function cancelAll() {
 function retry(id) {
   const job = find(id);
   if (!job || isActive(job)) return;
-  Object.assign(job, { status: 'queued', progress: 0, stats: null, message: '', error: null, hasParts: false, finishedAt: null });
-  internals.get(id).cancelRequested = false;
+  Object.assign(job, { status: 'queued', progress: 0, stats: null, message: '', error: null, hasParts: false, savedEarly: false, finishedAt: null });
+  Object.assign(internals.get(id), { cancelRequested: false, saveRequested: false, saveOnly: false });
   emit();
   pump();
 }
@@ -271,7 +383,7 @@ async function deleteParts(id) {
   const job = find(id);
   if (!job || isActive(job)) return;
   const unfinished = isUnfinished(job.dir, job.fileName);
-  for (const file of await partFiles(job)) await fsp.rm(path.join(job.dir, file), { force: true }).catch(() => {});
+  await removePartFiles(job);
   if (unfinished) await fsp.rm(path.join(job.dir, job.fileName), { force: true }).catch(() => {});
   job.hasParts = false;
   if (job.status === 'cancelled') job.message = 'Stopped. Partial files were deleted.';
@@ -283,6 +395,7 @@ module.exports = {
   create,
   cancel,
   cancelAll,
+  saveParts,
   retry,
   remove,
   clearFinished,
