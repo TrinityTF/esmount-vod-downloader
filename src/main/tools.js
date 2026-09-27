@@ -297,4 +297,6 @@ module.exports = {
   whenReady: () => allPromise,
   commandEnv,
   twitchDlpCommand,
+  /** The ffmpeg to run directly (our private copy, or the one on this PC). */
+  ffmpegPath: () => (ffmpegDir ? path.join(ffmpegDir, 'ffmpeg.exe') : 'ffmpeg'),
 };

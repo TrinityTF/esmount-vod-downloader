@@ -136,6 +136,15 @@ function start() {
 
   // ---------------------------------------------------------------- IPC
 
+  /** A file name the user typed, cut down to something Windows accepts. */
+  function normalizeFileName(value) {
+    const typed = String(value || '').trim();
+    if (!typed) return null;
+    const name = U.sanitizeFileName(typed.replace(/[\\/]+/g, ' ').replace(/\.mp4$/i, '')).slice(0, 150).trim();
+    if (!name) throw new Error('Please enter a file name.');
+    return name;
+  }
+
   /** Validates what the window sent and fills in the VOD details. */
   async function resolveDownload(options, { forPreview = false } = {}) {
     const video = await twitch.getVideo(options.url);
@@ -157,6 +166,7 @@ function start() {
     if (atLiveEdge) end = null;
     const followLive = atLiveEdge && Boolean(options.followLive);
 
+    const customName = normalizeFileName(options.fileName);
     const dir = String(options.dir || '').trim();
     if (!dir || !path.isAbsolute(dir)) throw new Error('Please choose a download folder.');
     if (!forPreview) {
@@ -183,6 +193,7 @@ function start() {
       isLive: video.isLive,
       followLive,
       stopAtLiveEdge: atLiveEdge && !followLive,
+      customName,
     };
   }
 
@@ -192,7 +203,7 @@ function start() {
     'video:get': (url) => twitch.getVideo(url),
     'video:formats': (url) => twitch.getFormats(url),
 
-    'download:preview': async (options) => downloads.previewCommand(await resolveDownload(options, { forPreview: true })),
+    'download:preview': async (options) => downloads.preview(await resolveDownload(options, { forPreview: true })),
     'download:start': async (options) => {
       const download = await resolveDownload(options);
       await settings.update({ downloadDir: download.dir, quality: download.format });

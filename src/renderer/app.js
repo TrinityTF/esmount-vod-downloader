@@ -20,6 +20,7 @@ const ui = {
   flashJobId: null,
   dirInitialized: false,
   previewKey: null,
+  nameDirty: false,
 };
 
 // ---------------------------------------------------------------- helpers
@@ -125,6 +126,8 @@ function resetVideo() {
   $('video-card').hidden = true;
   $('video-skeleton').hidden = true;
   $('live-choice').hidden = true;
+  setNameDirty(false);
+  $('file-name').value = '';
   renderQualitiesMessage('Paste a link to see the available qualities.');
   $('range-summary').textContent = '';
   updateForm();
@@ -149,6 +152,8 @@ async function loadVideo(url, id) {
   const token = ++ui.loadToken;
   Object.assign(ui, { video: null, formats: null, format: null, loadingId: id });
   document.querySelector('input[name="live-mode"][value="stop"]').checked = true;
+  setNameDirty(false);
+  $('file-name').value = '';
   $('video-card').hidden = true;
   $('live-choice').hidden = true;
   $('video-skeleton').hidden = false;
@@ -360,11 +365,13 @@ function formOptions() {
     format: ui.format,
     dir: $('dir').value.trim(),
     followLive: followLive(),
+    fileName: ui.nameDirty ? $('file-name').value.trim() : null,
   };
 }
 
 const formReady = () =>
   Boolean(ui.video && ui.formats && ui.format && ui.end > ui.start && $('dir').value.trim()) &&
+  !(ui.nameDirty && !$('file-name').value.trim()) &&
   !$('start').classList.contains('invalid') &&
   !$('end').classList.contains('invalid');
 
@@ -389,14 +396,21 @@ const schedulePreview = debounce(async () => {
   const token = ++previewToken;
   if (!formReady()) return ($('command-preview').hidden = true);
   try {
-    const command = await api.previewCommand(formOptions());
+    const preview = await api.previewCommand(formOptions());
     if (token !== previewToken) return;
-    $('command-text').textContent = command;
+    $('command-text').textContent = preview.command;
     $('command-preview').hidden = false;
+    if (!ui.nameDirty && document.activeElement !== $('file-name')) $('file-name').value = preview.suggestedName;
   } catch {
     if (token === previewToken) $('command-preview').hidden = true;
   }
 }, 200);
+
+function setNameDirty(dirty) {
+  ui.nameDirty = dirty;
+  $('reset-name').hidden = !dirty;
+  if (!dirty) ui.previewKey = null; // force a refresh so the suggested name comes back
+}
 
 function showFormError(message) {
   $('form-error').textContent = message;
@@ -413,6 +427,7 @@ async function submit(event) {
   try {
     const job = await api.startDownload(formOptions());
     ui.flashJobId = job.id;
+    setNameDirty(false); // the next download gets a fresh suggested name
     toast(queued ? 'Added to the queue' : 'Download started');
   } catch (err) {
     showFormError(err.message);
@@ -799,6 +814,15 @@ function init() {
   $('open-dir').addEventListener('click', () => api.openFolder($('dir').value.trim()).catch((err) => toast(err.message)));
   $('dir').addEventListener('input', debounce(updateForm, 250));
   $('dir').addEventListener('change', () => $('dir').value.trim() && api.saveSettings({ downloadDir: $('dir').value.trim() }));
+
+  $('file-name').addEventListener('input', () => {
+    setNameDirty(true);
+    updateForm();
+  });
+  $('reset-name').addEventListener('click', () => {
+    setNameDirty(false);
+    updateForm();
+  });
 
   $('copy-command').addEventListener('click', async () => {
     await api.copyText($('command-text').textContent);

@@ -5,6 +5,7 @@
 const fs = require('node:fs');
 const fsp = require('node:fs/promises');
 const path = require('node:path');
+const { pipeline } = require('node:stream/promises');
 const { EventEmitter } = require('node:events');
 const U = require('./util');
 const tools = require('./tools');
@@ -40,7 +41,8 @@ const isWholeVod = (o) => o.start <= 0 && o.end == null;
 const clipLength = (job) => Math.max(1, (job.end == null ? job.duration : job.end) - job.start);
 
 function baseName(o) {
-  const title = o.title.length > 90 ? `${o.title.slice(0, 90).trim()}…` : o.title;
+  if (o.customName) return U.sanitizeFileName(o.customName);
+  const title = o.title.length > 70 ? `${o.title.slice(0, 70).trim()}…` : o.title;
   let name = `${o.channel} - ${title} [v${o.vodId}]`;
   if (!isWholeVod(o)) name += ` (${U.formatStamp(o.start)}-${o.end == null ? 'end' : U.formatStamp(o.end)})`;
   if (!o.isBest) name += ` [${o.formatLabel}]`;
@@ -71,9 +73,14 @@ function buildCommand(o, outputPath) {
   return tools.twitchDlpCommand(args);
 }
 
-/** The command a download would run, for showing in the UI before starting. */
-function previewCommand(o) {
-  return buildCommand(o, path.join(o.dir, chooseFileName(o.dir, baseName(o))));
+/** What a download would run and save, for showing in the UI before it starts. */
+function preview(o) {
+  const fileName = chooseFileName(o.dir, baseName(o));
+  return {
+    command: buildCommand(o, path.join(o.dir, fileName)),
+    fileName,
+    suggestedName: `${baseName({ ...o, customName: null })}.mp4`,
+  };
 }
 
 // ---------------------------------------------------------------- running
@@ -87,6 +94,56 @@ async function partFiles(job) {
 
 async function removePartFiles(job) {
   for (const file of await partFiles(job)) await fsp.rm(path.join(job.dir, file), { force: true }).catch(() => {});
+}
+
+/** The downloaded video parts, in playback order. */
+async function fragmentFiles(job) {
+  const fragNumber = (file) => Number(file.match(/\.part-Frag(\d+)$/)?.[1]);
+  return (await partFiles(job)).filter((file) => fragNumber(file)).sort((a, b) => fragNumber(a) - fragNumber(b));
+}
+
+async function concatFiles(files, destination) {
+  const out = fs.createWriteStream(destination);
+  try {
+    for (const file of files) await pipeline(fs.createReadStream(file), out, { end: false });
+  } finally {
+    await new Promise((resolve) => out.end(resolve));
+  }
+}
+
+/**
+ * Joins the downloaded parts with ffmpeg ourselves.
+ * twitch-dlp's own merge always asks ffmpeg for a video track, which fails on
+ * audio-only downloads, so the app finishes those (and any other failed merge) here.
+ */
+async function mergeWithFfmpeg(job, outputPath) {
+  const fragments = await fragmentFiles(job);
+  if (fragments.length === 0) return false;
+
+  Object.assign(job, { status: 'merging', progress: 0, stats: null, message: 'Joining the parts into one video…' });
+  emit();
+  addLog(job, `Joining ${fragments.length} downloaded parts with ffmpeg`);
+
+  const joinedPath = `${outputPath}.parts`;
+  await fsp.rm(outputPath, { force: true });
+  await concatFiles(
+    fragments.map((file) => path.join(job.dir, file)),
+    joinedPath,
+  );
+
+  // "?" after each stream keeps ffmpeg happy whether or not the download has video.
+  const base = ['-y', '-hide_banner', '-loglevel', 'error', '-i', `file:${joinedPath}`, '-map', '0:v:0?', '-map', '0:a:0?', '-dn', '-ignore_unknown', '-c', 'copy'];
+  const tail = ['-f', 'mp4', '-movflags', '+faststart', `file:${outputPath}`];
+  for (const fixup of [[], ['-bsf:a', 'aac_adtstoasc']]) {
+    const { code, stderr } = await U.run(tools.ffmpegPath(), [...base, ...fixup, ...tail], { cwd: job.dir, env: tools.commandEnv() });
+    if (code === 0) break;
+    if (stderr.trim()) addLog(job, stderr.trim().split(/\r?\n/).slice(-4).join('\n'));
+    await fsp.rm(outputPath, { force: true });
+  }
+  await fsp.rm(joinedPath, { force: true });
+
+  const output = await fsp.stat(outputPath).catch(() => null);
+  return Boolean(output && output.size >= MIN_VIDEO_BYTES);
 }
 
 /** Runs a twitch-dlp command line, feeding its output to the UI. Returns the exit code. */
@@ -188,6 +245,8 @@ async function runJob(job) {
   const empty = output && output.size < MIN_VIDEO_BYTES;
   if (empty) await fsp.rm(outputPath, { force: true }).catch(() => {});
   if (errorMessage || !output?.size || empty || isUnfinished(job.dir, job.fileName)) {
+    // The download itself may have worked and only twitch-dlp's merge failed.
+    if (!internal.cancelRequested && (await mergeWithFfmpeg(job, outputPath))) return finishSaved(job, outputPath, false);
     Object.assign(job, {
       status: 'error',
       message: '',
@@ -198,11 +257,27 @@ async function runJob(job) {
           : exitCode
             ? `The command stopped with exit code ${exitCode}.`
             : 'The download did not finish. See the output for details.'),
-      hasParts: (await partFiles(job)).length > 0,
+      hasParts: (await fragmentFiles(job)).length > 0,
     });
     return;
   }
   Object.assign(job, { status: 'done', progress: 1, message: '', outputPath, size: output.size, hasParts: false });
+}
+
+/** Marks a download finished, cleaning up the parts the merge left behind. */
+async function finishSaved(job, outputPath, savedEarly) {
+  await removePartFiles(job);
+  const output = await fsp.stat(outputPath).catch(() => null);
+  Object.assign(job, {
+    status: 'done',
+    progress: 1,
+    message: '',
+    error: null,
+    outputPath,
+    size: output?.size || 0,
+    hasParts: false,
+    savedEarly,
+  });
 }
 
 /**
@@ -222,12 +297,14 @@ async function saveDownloadedParts(job, outputPath) {
   });
   emit();
 
-  if ((await partFiles(job)).every((file) => !file.includes('.part-Frag'))) {
+  const savedEarly = !job.stopAtLiveEdge;
+  if ((await fragmentFiles(job)).length === 0) {
     Object.assign(job, { status: 'error', message: '', error: 'There are no downloaded parts to save.', hasParts: false });
     return;
   }
   await fsp.rm(outputPath, { force: true }); // ffmpeg refuses to overwrite
 
+  // twitch-dlp's own merge keeps the video's timing information, so try it first.
   let errorMessage = null;
   const onLine = (line) => {
     if (FFMPEG_TIME_REGEX.test(line)) return;
@@ -237,31 +314,20 @@ async function saveDownloadedParts(job, outputPath) {
   const exitCode = await runCommand(job, tools.twitchDlpCommand([outputPath, '--merge-fragments']), onLine);
 
   const output = await fsp.stat(outputPath).catch(() => null);
-  if (errorMessage || !output?.size || output.size < MIN_VIDEO_BYTES) {
-    Object.assign(job, {
-      status: 'error',
-      message: '',
-      error: errorMessage || `Saving the downloaded parts failed (exit code ${exitCode}).`,
-      hasParts: (await partFiles(job)).length > 0,
-    });
-    return;
-  }
-  // --merge-fragments keeps the parts, so clean them up now that the video is saved.
-  await removePartFiles(job);
+  if (!errorMessage && output?.size >= MIN_VIDEO_BYTES) return finishSaved(job, outputPath, savedEarly);
+
+  if (await mergeWithFfmpeg(job, outputPath)) return finishSaved(job, outputPath, savedEarly);
   Object.assign(job, {
-    status: 'done',
-    progress: 1,
+    status: 'error',
     message: '',
-    outputPath,
-    size: output.size,
-    hasParts: false,
-    savedEarly: !job.stopAtLiveEdge,
+    error: errorMessage || `Saving the downloaded parts failed (exit code ${exitCode}).`,
+    hasParts: (await fragmentFiles(job)).length > 0,
   });
 }
 
 async function finishCancelled(job) {
   job.status = 'cancelled';
-  job.hasParts = (await partFiles(job)).some((file) => file.includes('.part-Frag'));
+  job.hasParts = (await fragmentFiles(job)).length > 0;
   job.message = job.hasParts
     ? 'Stopped. Save what was downloaded, or start it again to continue where it left off.'
     : 'Stopped.';
@@ -303,6 +369,7 @@ function create(o) {
     formatLabel: o.formatLabel,
     isBest: o.isBest,
     dir: o.dir,
+    customName: o.customName || null,
     isLive: Boolean(o.isLive),
     followLive: Boolean(o.followLive),
     stopAtLiveEdge: Boolean(o.stopAtLiveEdge),
@@ -400,7 +467,7 @@ module.exports = {
   remove,
   clearFinished,
   deleteParts,
-  previewCommand,
+  preview,
   get: find,
   list: () => jobs,
   log: (id) => internals.get(id)?.log || [],

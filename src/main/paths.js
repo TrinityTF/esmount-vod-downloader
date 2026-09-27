@@ -2,7 +2,10 @@
 const path = require('node:path');
 
 // Everything the app downloads or saves lives in %LOCALAPPDATA%\Esmount VOD Downloader.
-const DATA = path.join(process.env.LOCALAPPDATA || path.join(require('node:os').homedir(), 'AppData', 'Local'), 'Esmount VOD Downloader');
+// ESMOUNT_DATA_DIR points a test run somewhere else, so it can run beside an installed copy.
+const DATA =
+  process.env.ESMOUNT_DATA_DIR ||
+  path.join(process.env.LOCALAPPDATA || path.join(require('node:os').homedir(), 'AppData', 'Local'), 'Esmount VOD Downloader');
 
 module.exports = {
   DATA,

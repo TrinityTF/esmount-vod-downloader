@@ -134,6 +134,12 @@
             <button class="btn secondary" id="browse" type="button">Browse…</button>
             <button class="btn icon-only" id="open-dir" type="button" title="Open this folder" aria-label="Open this folder"><svg><use href="#i-folder"/></svg></button>
           </div>
+
+          <div class="name-head">
+            <label class="sub-label" for="file-name">File name</label>
+            <button class="link-btn" id="reset-name" type="button" hidden>Use suggested name</button>
+          </div>
+          <input id="file-name" type="text" spellcheck="false" placeholder="Paste a link to see the file name">
         </div>
 
         <div class="command" id="command-preview" hidden>

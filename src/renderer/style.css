@@ -495,3 +495,9 @@ input[type="text"].invalid { border-color: var(--danger); box-shadow: 0 0 0 3px 
 
 .chip[data-status="live"] { background: #fdeaec; color: #c0102c; }
 @media (prefers-color-scheme: dark) { .chip[data-status="live"] { background: #3a1216; color: #ff8a95; } }
+
+/* ------------------------------------------------------------------ file name */
+.name-head { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; margin: 12px 0 5px; }
+.sub-label { font-size: 12px; color: var(--muted); }
+.name-head .link-btn { font-size: 12px; }
+#file-name { font-size: 13px; }
