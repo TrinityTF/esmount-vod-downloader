@@ -427,7 +427,6 @@ async function submit(event) {
   try {
     const job = await api.startDownload(formOptions());
     ui.flashJobId = job.id;
-    setNameDirty(false); // the next download gets a fresh suggested name
     toast(queued ? 'Added to the queue' : 'Download started');
   } catch (err) {
     showFormError(err.message);
