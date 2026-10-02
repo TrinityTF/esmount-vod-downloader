@@ -105,12 +105,19 @@ function toast(message) {
   toastTimer = setTimeout(() => (node.hidden = true), 3000);
 }
 
-const VOD_REGEXES = [/(?:^|\/\/|\.)twitch\.tv\/(?:videos|[^/?#]+\/v(?:ideo)?)\/(\d+)/i, /player\.twitch\.tv\/\?.*?\bvideo=v?(\d+)/i, /^v?(\d{5,})$/];
+const YT_ID = '([\\w-]{11})';
+const VOD_REGEXES = [
+  new RegExp(`(?:^|\\/\\/|\\.)youtube(?:-nocookie)?\\.com\\/watch\\?(?:[^#]*&)?v=${YT_ID}`, 'i'),
+  new RegExp(`(?:^|\\/\\/|\\.)youtube(?:-nocookie)?\\.com\\/(?:live|shorts|embed|v)\\/${YT_ID}`, 'i'),
+  new RegExp(`(?:^|\\/\\/)youtu\\.be\\/${YT_ID}`, 'i'),
+  /(?:^|\/\/|\.)twitch\.tv\/(?:videos|[^/?#]+\/v(?:ideo)?)\/(\d+)/i, /player\.twitch\.tv\/\?.*?\bvideo=v?(\d+)/i,
+  /^v?(\d{5,})$/,
+];
 const parseVodId = (text) => VOD_REGEXES.map((r) => String(text).trim().match(r)).find(Boolean)?.[1] || null;
 
 // ---------------------------------------------------------------- step 1: VOD link
 
-const URL_HINT = 'Paste a link to a Twitch VOD (past broadcast, highlight or upload).';
+const URL_HINT = 'Paste a link to a Twitch VOD (past broadcast, highlight or upload) or a YouTube video.';
 
 function setUrlHint(text, isError = false) {
   const hint = $('url-hint');
@@ -142,7 +149,7 @@ function onUrlChanged() {
   const id = parseVodId(text);
   if (!id) {
     resetVideo();
-    return setUrlHint('That doesn’t look like a Twitch VOD link. It should look like https://www.twitch.tv/videos/123456789', true);
+    return setUrlHint('That doesn’t look like a Twitch VOD or YouTube link. It should look like https://www.twitch.tv/videos/123456789 or https://www.youtube.com/watch?v=FYPabo8zmJg', true);
   }
   if (id === ui.loadingId) return;
   loadVideo(text, id);

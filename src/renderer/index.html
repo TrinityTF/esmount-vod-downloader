@@ -28,7 +28,7 @@
       <span class="logo" aria-hidden="true"><svg><use href="#i-download"/></svg></span>
       <div>
         <h1>Esmount VOD Downloader</h1>
-        <p>Save Twitch VODs, or just the part you want</p>
+        <p>Save Twitch VODs and YouTube videos, or just the part you want</p>
       </div>
     </div>
     <div class="status-pill" id="status-pill" data-state="working"><span class="dot"></span><span id="status-text">Starting…</span></div>
@@ -54,12 +54,12 @@
         </div>
 
         <div class="step">
-          <label class="step-label" for="url"><span class="step-num">1</span>VOD link</label>
+          <label class="step-label" for="url"><span class="step-num">1</span>Video link</label>
           <div class="input-icon">
             <svg><use href="#i-link"/></svg>
-            <input id="url" type="text" placeholder="https://www.twitch.tv/videos/123456789" spellcheck="false">
+            <input id="url" type="text" placeholder="https://www.twitch.tv/videos/123456789 or https://www.youtube.com/watch?v=…" spellcheck="false">
           </div>
-          <p class="hint" id="url-hint">Paste a link to a Twitch VOD (past broadcast, highlight or upload).</p>
+          <p class="hint" id="url-hint">Paste a link to a Twitch VOD (past broadcast, highlight or upload) or a YouTube video.</p>
 
           <div class="video-card" id="video-card" hidden>
             <div class="thumb">
@@ -166,7 +166,7 @@
         <div class="empty" id="jobs-empty">
           <div class="empty-art"><svg><use href="#i-download"/></svg></div>
           <p><b>No downloads yet</b></p>
-          <p class="muted">Paste a VOD link, pick the part and quality, and hit Download.</p>
+          <p class="muted">Paste a Twitch or YouTube link, pick the part and quality, and hit Download.</p>
         </div>
         <div class="jobs" id="jobs"></div>
       </div>

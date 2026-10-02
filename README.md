@@ -1,6 +1,6 @@
 # Esmount VOD Downloader
 
-A Windows program for downloading Twitch VODs, or just the part you want.
+A Windows program for downloading Twitch VODs and YouTube videos, or just the part you want.
 
 Paste a VOD link, choose the start and end time, pick a quality and a folder, and click **Download**.
 Behind the scenes it runs [twitch-dlp](https://github.com/DmitryScaletta/twitch-dlp) for you:
@@ -28,6 +28,7 @@ On first start, the program checks for and downloads what it needs:
 | Node.js + npx | Node.js 22+ isn't installed | `%LOCALAPPDATA%\Esmount VOD Downloader\tools\node` |
 | ffmpeg | ffmpeg isn't installed | `%LOCALAPPDATA%\Esmount VOD Downloader\tools\ffmpeg` |
 | twitch-dlp | Always (latest version, through `npx`) | npm's cache |
+| yt-dlp | For YouTube links; `yt-dlp.exe` is fetched from GitHub and updated on each start | `%LOCALAPPDATA%\Esmount VOD Downloader\tools\yt-dlp` |
 
 Nothing is installed system-wide. Downloads are checked against their published checksums.
 
@@ -87,6 +88,7 @@ The installer is written to `dist/`. To change the icon, edit `build/icon.svg` a
 src/main/       Electron main process
   main.js         window, IPC, notifications, lifecycle
   tools.js        finds or downloads Node.js/npx, ffmpeg, twitch-dlp
+  youtube.js      YouTube video details and qualities (yt-dlp -J)
   twitch.js       VOD details (title, length, thumbnail) and qualities (twitch-dlp -F)
   downloads.js    download queue: runs the npx twitch-dlp command and parses its progress
   updater.js      GitHub release updates (electron-updater)

@@ -1,7 +1,7 @@
 'use strict';
 // Download queue. For each download it runs
 //   npx --yes twitch-dlp@latest <VOD link> -f <quality> --download-sections "*<start>-<end>" -o "<file>"
-// in cmd.exe (one at a time) and turns the command's output into progress for the UI.
+// in cmd.exe (one at a time; YouTube links run yt-dlp.exe instead) and turns the command's output into progress for the UI.
 const fs = require('node:fs');
 const fsp = require('node:fs/promises');
 const path = require('node:path');
@@ -9,12 +9,14 @@ const { pipeline } = require('node:stream/promises');
 const { EventEmitter } = require('node:events');
 const U = require('./util');
 const tools = require('./tools');
+const youtube = require('./youtube');
 
 const MAX_LOG_LINES = 500;
 // Anything smaller than this holds no video, however short the clip is.
 const MIN_VIDEO_BYTES = 16 * 1024;
 const ACTIVE = new Set(['queued', 'preparing', 'downloading', 'merging']);
 const PROGRESS_REGEX = /\[download\]\s+([\d.,]+)%\s+of\s+~\s*(\S+)\s+at\s+(\S+)\s+ETA\s+(\S+)\s+\(frag\s+(\d+)\/(\d+)\)/;
+const YTDLP_PROGRESS_REGEX = /\[download\]\s+([\d.]+)%\s+of\s+~?\s*(\S+)\s+at\s+(\S+)\s+ETA\s+(\S+)/;
 const FFMPEG_TIME_REGEX = /\btime=(\d+):(\d+):(\d+(?:\.\d+)?)/;
 
 const events = new EventEmitter();
@@ -43,7 +45,7 @@ const clipLength = (job) => Math.max(1, (job.end == null ? job.duration : job.en
 function baseName(o) {
   if (o.customName) return U.sanitizeFileName(o.customName);
   const title = o.title.length > 70 ? `${o.title.slice(0, 70).trim()}…` : o.title;
-  let name = `${o.channel} - ${title} [v${o.vodId}]`;
+  let name = `${o.channel} - ${title} [${o.source === 'youtube' ? '' : 'v'}${o.vodId}]`;
   if (!isWholeVod(o)) name += ` (${U.formatStamp(o.start)}-${o.end == null ? 'end' : U.formatStamp(o.end)})`;
   if (!o.isBest) name += ` [${o.formatLabel}]`;
   return U.sanitizeFileName(name);
@@ -65,7 +67,17 @@ function sectionArg(o) {
   return `*${U.formatClock(o.start)}-${o.end == null ? 'inf' : U.formatClock(o.end)}`;
 }
 
+function buildYoutubeCommand(o, outputPath) {
+  const args = [o.url, '--no-playlist', '--newline', '--no-mtime', '--windows-filenames', '--js-runtimes', 'node'];
+  args.push('-f', youtube.formatSelector(o.format), '-S', 'res,vcodec:h264,acodec:m4a', '--merge-output-format', 'mp4');
+  const section = sectionArg(o);
+  if (section) args.push('--download-sections', section, '--force-keyframes-at-cuts');
+  args.push('-o', outputPath.replace(/%/g, '%%'));
+  return tools.ytDlpCommand(args);
+}
+
 function buildCommand(o, outputPath) {
+  if (o.source === 'youtube') return buildYoutubeCommand(o, outputPath);
   const args = [o.url, '-f', o.format];
   const section = sectionArg(o);
   if (section) args.push('--download-sections', section);
@@ -171,6 +183,7 @@ async function runCommand(job, command, onLine) {
 /** Recognises the problems twitch-dlp and npx report, so the user gets a plain message. */
 function readErrorLine(line) {
   if (/^ERROR:/i.test(line)) return line.replace(/^ERROR:\s*/i, '');
+  if (/private video|members-only/i.test(line)) return 'This video is private or members-only.';
   if (/might be private/i.test(line)) return 'This VOD seems to be private, deleted, or sub-only.';
   if (/merging failed/i.test(line)) return 'Joining the video parts failed. See the output for details.';
   if (/^npm (error|ERR!)/i.test(line)) return 'npx could not run twitch-dlp. See the output for details.';
@@ -192,6 +205,7 @@ async function runJob(job) {
     // Resuming: remove a half-joined file from last time (ffmpeg won't overwrite it). Parts are kept.
     await fsp.rm(outputPath, { force: true });
   }
+  if (job.source === 'youtube') return runYoutubeJob(job, outputPath);
   if (internal.saveOnly) return saveDownloadedParts(job, outputPath);
 
   job.message = 'Contacting Twitch…';
@@ -258,6 +272,55 @@ async function runJob(job) {
             ? `The command stopped with exit code ${exitCode}.`
             : 'The download did not finish. See the output for details.'),
       hasParts: (await fragmentFiles(job)).length > 0,
+    });
+    return;
+  }
+  Object.assign(job, { status: 'done', progress: 1, message: '', outputPath, size: output.size, hasParts: false });
+}
+
+/** A YouTube download: yt-dlp downloads the video and audio and joins them itself. */
+async function runYoutubeJob(job, outputPath) {
+  const internal = internals.get(job.id);
+  job.message = 'Contacting YouTube…';
+  emit();
+  try {
+    await tools.whenYtDlpReady();
+  } catch (err) {
+    return Object.assign(job, { status: 'error', message: '', error: err.message });
+  }
+
+  const streams = youtube.formatSelector(job.format).includes('+') ? 2 : 1; // video + audio are fetched one after the other
+  let stream = 0;
+  let errorMessage = null;
+  const onLine = (line) => {
+    if (/^\[download\] Destination:/.test(line)) stream = Math.min(stream + 1, streams);
+    const progress = line.match(YTDLP_PROGRESS_REGEX);
+    if (progress) {
+      const [, percent, size, speed, eta] = progress;
+      const share = (Math.max(stream, 1) - 1 + Number(percent) / 100) / streams;
+      job.status = 'downloading';
+      job.progress = Math.min(1, share);
+      job.stats = { size, speed, eta, parts: `${Math.max(stream, 1)}/${streams}` };
+      job.message = '';
+      return emit();
+    }
+    addLog(job, line);
+    errorMessage = readErrorLine(line) || errorMessage;
+    if (/^\[(Merger|VideoRemuxer|FixupM3u8|FixupM4a|FixupStretched)\]/.test(line) && job.status !== 'merging') {
+      Object.assign(job, { status: 'merging', progress: 0, stats: null, message: 'Joining video and audio…' });
+      emit();
+    }
+  };
+
+  const exitCode = await runCommand(job, buildCommand(job, outputPath), onLine);
+  if (internal.cancelRequested) return finishCancelled(job);
+
+  const output = await fsp.stat(outputPath).catch(() => null);
+  if (exitCode !== 0 || !output || output.size < MIN_VIDEO_BYTES) {
+    Object.assign(job, {
+      status: 'error',
+      message: '',
+      error: errorMessage || (exitCode ? `The command stopped with exit code ${exitCode}.` : 'The download did not finish. See the output for details.'),
     });
     return;
   }
@@ -357,6 +420,7 @@ async function pump() {
 function create(o) {
   const job = {
     id: String(nextId++),
+    source: o.source || 'twitch',
     vodId: o.vodId,
     url: o.url,
     title: o.title,

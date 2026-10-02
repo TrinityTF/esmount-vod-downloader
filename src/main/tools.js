@@ -3,6 +3,7 @@
 //   * Node.js 22+ with npx  (a private copy is downloaded if the PC doesn't have one)
 //   * ffmpeg                (downloaded if it is not installed)
 //   * twitch-dlp            (fetched once by npx so the first download starts fast)
+//   * yt-dlp                (yt-dlp.exe from GitHub, for YouTube links; kept up to date)
 // Downloaded tools go to %LOCALAPPDATA%\Esmount VOD Downloader\tools - nothing is installed system-wide.
 const fs = require('node:fs');
 const fsp = require('node:fs/promises');
@@ -38,6 +39,7 @@ const state = {
     node: { label: 'Node.js + npx', status: 'pending', detail: 'Waiting…', progress: null },
     ffmpeg: { label: 'ffmpeg', status: 'pending', detail: 'Waiting…', progress: null },
     twitchDlp: { label: 'twitch-dlp', status: 'pending', detail: 'Waiting…', progress: null },
+    ytDlp: { label: 'yt-dlp (YouTube)', status: 'pending', detail: 'Waiting…', progress: null },
   },
 };
 
@@ -45,6 +47,7 @@ let nodeDir = null; // added to PATH when we use our private Node.js copy
 let ffmpegDir = null; // added to PATH when we use our private ffmpeg copy
 let nodePromise = null;
 let twitchDlpPromise = null;
+let ytDlpPromise = null;
 let allPromise = null;
 
 const emit = () => events.emit('change');
@@ -250,6 +253,44 @@ async function ensureTwitchDlp() {
   setStep('twitchDlp', { status: 'done', detail: `v${version}` });
 }
 
+// ---------------------------------------------------------------- yt-dlp (YouTube)
+
+const YTDLP_URL = 'https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe';
+const ytDlpExe = () => path.join(P.YTDLP_DIR, 'yt-dlp.exe');
+
+async function ytDlpVersion() {
+  try {
+    const { code, stdout } = await U.run(ytDlpExe(), ['--version'], { env: commandEnv(), timeout: 60000 });
+    return code === 0 ? stdout.trim().split(/\s+/)[0] || null : null;
+  } catch {
+    return null;
+  }
+}
+
+async function ensureYtDlp() {
+  setStep('ytDlp', { status: 'working', detail: 'Checking…', progress: null });
+  let version = fs.existsSync(ytDlpExe()) ? await ytDlpVersion() : null;
+  if (version) {
+    // YouTube changes often, so let yt-dlp update itself; a failed update is not a problem.
+    setStep('ytDlp', { detail: 'Checking for updates…' });
+    await U.run(ytDlpExe(), ['-U'], { env: commandEnv(), timeout: 2 * 60 * 1000 }).catch(() => {});
+    version = (await ytDlpVersion()) || version;
+    return setStep('ytDlp', { status: 'done', detail: `v${version}` });
+  }
+  await fsp.mkdir(P.YTDLP_DIR, { recursive: true });
+  const tmp = `${ytDlpExe()}.download`;
+  await U.downloadFile(YTDLP_URL, tmp, (done, total) =>
+    setStep('ytDlp', { progress: total ? done / total : null, detail: `Downloading… ${mb(done)}${total ? ` of ${mb(total)}` : ''}` }),
+  );
+  await fsp.rename(tmp, ytDlpExe());
+  version = await ytDlpVersion();
+  if (!version) throw new Error('the downloaded yt-dlp does not run');
+  setStep('ytDlp', { status: 'done', detail: `v${version}`, progress: null });
+}
+
+/** yt-dlp as it will be run (and shown to the user). */
+const ytDlpCommand = (args) => [ytDlpExe(), ...args].map(U.quoteArg).join(' ');
+
 // ---------------------------------------------------------------- public API
 
 function failStep(key) {
@@ -280,6 +321,14 @@ function start() {
     }
     return failStep('twitchDlp')(err);
   });
+  // YouTube support is optional: if yt-dlp cannot be set up, Twitch downloads still work.
+  ytDlpPromise = ensureYtDlp().catch((err) => {
+    U.log('Setting up yt-dlp failed:', err);
+    const message = `${err.message.charAt(0).toUpperCase()}${err.message.slice(1)}`;
+    setStep('ytDlp', { status: 'error', detail: message, progress: null });
+    throw new Error(`YouTube support is unavailable: ${message}. Restart the app to try again.`);
+  });
+  ytDlpPromise.catch(() => {});
   allPromise = Promise.all([nodePromise, ffmpegPromise, twitchDlpPromise]).then(() => {
     state.status = 'ready';
     emit();
@@ -295,8 +344,12 @@ module.exports = {
   whenTwitchDlpReady: () => twitchDlpPromise,
   /** Resolves when everything needed for downloading is ready. */
   whenReady: () => allPromise,
+  /** Resolves when yt-dlp can run; rejects with a readable message if it could not be set up. */
+  whenYtDlpReady: () => ytDlpPromise,
   commandEnv,
   twitchDlpCommand,
+  ytDlpExe,
+  ytDlpCommand,
   /** The ffmpeg to run directly (our private copy, or the one on this PC). */
   ffmpegPath: () => (ffmpegDir ? path.join(ffmpegDir, 'ffmpeg.exe') : 'ffmpeg'),
 };

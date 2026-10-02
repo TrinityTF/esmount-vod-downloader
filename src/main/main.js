@@ -22,6 +22,7 @@ function start() {
   const settings = require('./settings');
   const tools = require('./tools');
   const twitch = require('./twitch');
+  const youtube = require('./youtube');
   const downloads = require('./downloads');
   const updater = require('./updater');
 
@@ -136,6 +137,9 @@ function start() {
 
   // ---------------------------------------------------------------- IPC
 
+  /** YouTube links go to yt-dlp; everything else is treated as a Twitch VOD. */
+  const providerFor = (url) => (youtube.parseUrl(url) ? { source: 'youtube', ...youtube } : { source: 'twitch', ...twitch });
+
   /** A file name the user typed, cut down to something Windows accepts. */
   function normalizeFileName(value) {
     const typed = String(value || '').trim();
@@ -147,8 +151,9 @@ function start() {
 
   /** Validates what the window sent and fills in the VOD details. */
   async function resolveDownload(options, { forPreview = false } = {}) {
-    const video = await twitch.getVideo(options.url);
-    const formats = await twitch.getFormats(options.url);
+    const provider = providerFor(options.url);
+    const video = await provider.getVideo(options.url);
+    const formats = await provider.getFormats(options.url);
     const format = formats.find((f) => f.id === options.format);
     if (!format) throw new Error('Please choose a quality.');
 
@@ -178,6 +183,7 @@ function start() {
     }
 
     return {
+      source: provider.source,
       vodId: video.id,
       url: video.url,
       title: video.title,
@@ -200,8 +206,8 @@ function start() {
   const handlers = {
     'state:get': () => snapshot(),
     'tools:retry': () => tools.start(),
-    'video:get': (url) => twitch.getVideo(url),
-    'video:formats': (url) => twitch.getFormats(url),
+    'video:get': (url) => providerFor(url).getVideo(url),
+    'video:formats': (url) => providerFor(url).getFormats(url),
 
     'download:preview': async (options) => downloads.preview(await resolveDownload(options, { forPreview: true })),
     'download:start': async (options) => {
