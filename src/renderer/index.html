@@ -179,7 +179,23 @@
     <span id="footer-tools"></span>
     <span class="sep">·</span>
     <span id="footer-update"></span>
+    <span class="sep">·</span>
+    <button class="link-btn" id="open-settings" type="button">Settings</button>
   </footer>
+
+  <dialog class="dialog" id="settings-dialog">
+    <h2>Settings</h2>
+    <label class="setting">
+      <input type="checkbox" id="beta-updates">
+      <span>
+        <b>Beta updates</b>
+        <span class="muted">Get test versions with the newest features before everyone else. They may have bugs. Switching this off keeps your current version until the next normal release.</span>
+      </span>
+    </label>
+    <div class="dialog-actions">
+      <button class="btn primary" id="settings-close" type="button">Done</button>
+    </div>
+  </dialog>
 
   <dialog class="dialog" id="update-dialog">
     <div class="dialog-icon"><svg><use href="#i-sparkle"/></svg></div>

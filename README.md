@@ -98,3 +98,9 @@ scripts/        icon rendering and release versioning
 ```
 
 Logs are written to `%LOCALAPPDATA%\Esmount VOD Downloader\logs\app.log`.
+
+## Beta releases
+
+- Pushes to `main` publish a normal release that every installed copy is offered.
+- Pushes to `beta` publish a pre-release (`1.0.N-beta`). Only installs with **Settings → Beta updates** switched on are offered those.
+- Switching beta off never downgrades: you stay on the beta until a newer normal release comes out.

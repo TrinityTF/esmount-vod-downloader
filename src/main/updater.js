@@ -1,6 +1,8 @@
 'use strict';
 // Checks GitHub Releases for a newer version and installs it when the user says yes.
-// Releases are built and published by .github/workflows/release.yml on every push.
+// Releases are built and published by .github/workflows/release.yml on every push:
+// pushes to main become normal releases, pushes to beta become pre-releases, which
+// only installs with "Beta updates" switched on are offered.
 const { app } = require('electron');
 const { EventEmitter } = require('node:events');
 const U = require('./util');
@@ -46,10 +48,12 @@ function friendlyError(err) {
   return message.split('\n')[0].slice(0, 200);
 }
 
-function init() {
+function init({ beta = false } = {}) {
   if (!app.isPackaged) return set({ status: 'dev' });
 
   ({ autoUpdater } = require('electron-updater'));
+  // Never set autoUpdater.channel: that also turns on downgrades.
+  autoUpdater.allowPrerelease = beta;
   autoUpdater.autoDownload = false;
   autoUpdater.autoInstallOnAppQuit = false;
   autoUpdater.logger = {
@@ -78,6 +82,15 @@ function check() {
   autoUpdater.checkForUpdates().catch(() => {}); // reported through the 'error' event
 }
 
+/** Switches beta (pre-release) updates on or off and checks again. Leaving beta never downgrades. */
+function setBeta(beta) {
+  if (!autoUpdater || autoUpdater.allowPrerelease === beta) return;
+  autoUpdater.allowPrerelease = beta;
+  if (['downloading', 'ready'].includes(state.status)) return;
+  set({ status: 'idle', version: null, notes: [], dismissed: false });
+  check();
+}
+
 /** Downloads the update, then restarts the app into the new version. */
 async function install() {
   if (!autoUpdater || state.status !== 'available') throw new Error('No update is available right now.');
@@ -93,6 +106,7 @@ module.exports = {
   init,
   check,
   install,
+  setBeta,
   dismiss: () => set({ dismissed: true }),
   isInstalling: () => state.status === 'ready',
 };

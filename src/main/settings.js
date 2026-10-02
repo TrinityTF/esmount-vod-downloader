@@ -7,7 +7,7 @@ const U = require('./util');
 
 const DOWNLOADS_FOLDER_ID = '{374DE290-123F-4565-9164-39C4925E467B}';
 
-let settings = { downloadDir: '', quality: 'best', ...U.readJson(P.SETTINGS_FILE, {}) };
+let settings = { downloadDir: '', quality: 'best', betaUpdates: false, ...U.readJson(P.SETTINGS_FILE, {}) };
 
 async function findDownloadsFolder() {
   try {
@@ -32,6 +32,7 @@ async function update(patch) {
   const allowed = {};
   if (typeof patch.downloadDir === 'string' && patch.downloadDir.trim()) allowed.downloadDir = patch.downloadDir.trim();
   if (typeof patch.quality === 'string' && patch.quality.trim()) allowed.quality = patch.quality.trim();
+  if (typeof patch.betaUpdates === 'boolean') allowed.betaUpdates = patch.betaUpdates;
   settings = { ...settings, ...allowed };
   await U.writeJson(P.SETTINGS_FILE, settings);
   return get();

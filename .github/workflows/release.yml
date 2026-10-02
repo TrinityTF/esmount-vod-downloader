@@ -1,10 +1,12 @@
 # Every push to main builds the Windows installer and publishes it as a GitHub release.
-# Installed copies of the app see the new release and ask their users to update.
+# Pushes to beta do the same as a pre-release (version x.y.N-beta), which only installs
+# with "Beta updates" switched on in Settings are offered. The run number is shared by
+# both branches, so every build has a higher version than the one before.
 name: Build and release
 
 on:
   push:
-    branches: [main]
+    branches: [main, beta]
     paths-ignore:
       - '**.md'
       - '.gitignore'
@@ -20,6 +22,8 @@ concurrency:
 jobs:
   release:
     runs-on: windows-latest
+    env:
+      CHANNEL: ${{ github.ref_name == 'beta' && 'beta' || 'stable' }}
     steps:
       - uses: actions/checkout@v5
         with:
@@ -34,7 +38,7 @@ jobs:
         run: npm ci
 
       - name: Set version and release notes
-        run: node scripts/prepare-release.js ${{ github.run_number }}
+        run: node scripts/prepare-release.js ${{ github.run_number }} ${{ env.CHANNEL }}
 
       # The draft release is created up front; electron-builder only uploads files into it
       # (letting it create the release races between its parallel uploads).
@@ -42,7 +46,8 @@ jobs:
         shell: bash
         run: |
           version="$(node -p "require('./package.json').version")"
-          gh release create "v$version" --draft --title "$version" --target "$GITHUB_SHA" --notes-file build/release-notes.md
+          flags=(); [ "$CHANNEL" = beta ] && flags=(--prerelease)
+          gh release create "v$version" --draft "${flags[@]}" --title "$version" --target "$GITHUB_SHA" --notes-file build/release-notes.md
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -55,6 +60,12 @@ jobs:
       # Published only once every file is there, so the app never sees a half-uploaded release.
       - name: Publish release
         shell: bash
-        run: gh release edit "v$(node -p "require('./package.json').version")" --draft=false --latest
+        run: |
+          version="$(node -p "require('./package.json').version")"
+          if [ "$CHANNEL" = beta ]; then
+            gh release edit "v$version" --draft=false --prerelease --latest=false
+          else
+            gh release edit "v$version" --draft=false --latest
+          fi
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

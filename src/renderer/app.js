@@ -838,6 +838,18 @@ function init() {
   $('clear-finished').addEventListener('click', () => api.clearFinished());
   $('setup-retry').addEventListener('click', () => api.retrySetup());
 
+  $('open-settings').addEventListener('click', () => {
+    $('beta-updates').checked = Boolean(ui.state?.settings.betaUpdates);
+    $('settings-dialog').showModal();
+  });
+  $('settings-close').addEventListener('click', () => $('settings-dialog').close());
+  $('beta-updates').addEventListener('change', (e) =>
+    api.saveSettings({ betaUpdates: e.target.checked }).then(
+      () => toast(e.target.checked ? 'Beta updates on' : 'Beta updates off'),
+      (err) => toast(err.message),
+    ),
+  );
+
   $('update-now').addEventListener('click', () =>
     api.installUpdate().catch((err) => {
       $('update-error').textContent = err.message;

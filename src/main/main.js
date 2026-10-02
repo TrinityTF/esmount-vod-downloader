@@ -243,7 +243,12 @@ function start() {
       const error = await shell.openPath(dir);
       if (error) throw new Error(error);
     },
-    'settings:save': (patch) => settings.update(patch || {}),
+    'settings:save': async (patch) => {
+      const saved = await settings.update(patch || {});
+      updater.setBeta(saved.betaUpdates);
+      pushState();
+      return saved;
+    },
     'clipboard:write': (text) => clipboard.writeText(String(text)),
 
     'update:check': () => updater.check(),
@@ -286,7 +291,7 @@ function start() {
     await settings.init();
     createWindow();
     tools.start();
-    updater.init();
+    updater.init({ beta: settings.get().betaUpdates });
     setTimeout(() => updater.check(), 3000);
     setInterval(() => updater.check(), 4 * 60 * 60 * 1000);
   });

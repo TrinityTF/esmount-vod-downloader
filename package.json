@@ -2,7 +2,7 @@
   "name": "esmount-vod-downloader",
   "productName": "Esmount VOD Downloader",
   "version": "1.0.0",
-  "description": "Download Twitch VODs, or just part of one, with a friendly UI powered by twitch-dlp",
+  "description": "Download Twitch VODs and YouTube videos, or just part of one, with a friendly UI",
   "author": "Esmount",
   "private": true,
   "repository": {
@@ -57,7 +57,8 @@
     },
     "publish": {
       "provider": "github",
-      "releaseType": "draft"
+      "releaseType": "draft",
+      "channel": "latest"
     }
   }
 }
