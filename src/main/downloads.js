@@ -51,13 +51,16 @@ function baseName(o) {
   return U.sanitizeFileName(name);
 }
 
+// YouTube audio-only downloads are saved as .m4a (everything else is .mp4).
+const extFor = (o) => (o.source === 'youtube' && o.format === 'audio_only' ? 'm4a' : 'mp4');
+
 // twitch-dlp keeps "<file>-log.tsv" next to the output until a download fully finishes.
 const isUnfinished = (dir, fileName) => fs.existsSync(path.join(dir, `${fileName}-log.tsv`));
 
 /** Picks a file name that doesn't overwrite a finished file, but resumes an unfinished one. */
-function chooseFileName(dir, base) {
+function chooseFileName(dir, base, ext = 'mp4') {
   for (let i = 1; ; i++) {
-    const name = i === 1 ? `${base}.mp4` : `${base} (${i}).mp4`;
+    const name = i === 1 ? `${base}.${ext}` : `${base} (${i}).${ext}`;
     if (!fs.existsSync(path.join(dir, name)) || isUnfinished(dir, name)) return name;
   }
 }
@@ -69,10 +72,14 @@ function sectionArg(o) {
 
 function buildYoutubeCommand(o, outputPath) {
   const args = [o.url, '--no-playlist', '--newline', '--no-mtime', '--windows-filenames', '--js-runtimes', 'node'];
-  args.push('-f', youtube.formatSelector(o.format), '-S', 'res,vcodec:h264,acodec:m4a', '--merge-output-format', 'mp4');
+  args.push('-f', youtube.formatSelector(o.format));
+  if (extFor(o) === 'm4a') args.push('-x', '--audio-format', 'm4a');
+  else args.push('-S', 'res,vcodec:h264,acodec:m4a', '--merge-output-format', 'mp4');
   const section = sectionArg(o);
   if (section) args.push('--download-sections', section, '--force-keyframes-at-cuts');
-  args.push('-o', outputPath.replace(/%/g, '%%'));
+  // Audio extraction picks the final extension itself, so leave it to yt-dlp.
+  const target = extFor(o) === 'm4a' ? outputPath.replace(/\.m4a$/i, '.%(ext)s') : outputPath;
+  args.push('-o', target.replace(/%(?!\(ext\)s)/g, '%%'));
   return tools.ytDlpCommand(args);
 }
 
@@ -87,11 +94,11 @@ function buildCommand(o, outputPath) {
 
 /** What a download would run and save, for showing in the UI before it starts. */
 function preview(o) {
-  const fileName = chooseFileName(o.dir, baseName(o));
+  const fileName = chooseFileName(o.dir, baseName(o), extFor(o));
   return {
     command: buildCommand(o, path.join(o.dir, fileName)),
     fileName,
-    suggestedName: `${baseName({ ...o, customName: null })}.mp4`,
+    suggestedName: `${baseName({ ...o, customName: null })}.${extFor(o)}`,
   };
 }
 
@@ -199,7 +206,7 @@ async function runJob(job) {
   if (internal.cancelRequested) return finishCancelled(job);
 
   await fsp.mkdir(job.dir, { recursive: true });
-  job.fileName ||= chooseFileName(job.dir, baseName(job));
+  job.fileName ||= chooseFileName(job.dir, baseName(job), extFor(job));
   const outputPath = path.join(job.dir, job.fileName);
   if (isUnfinished(job.dir, job.fileName)) {
     // Resuming: remove a half-joined file from last time (ffmpeg won't overwrite it). Parts are kept.
@@ -306,7 +313,7 @@ async function runYoutubeJob(job, outputPath) {
     }
     addLog(job, line);
     errorMessage = readErrorLine(line) || errorMessage;
-    if (/^\[(Merger|VideoRemuxer|FixupM3u8|FixupM4a|FixupStretched)\]/.test(line) && job.status !== 'merging') {
+    if (/^\[(Merger|VideoRemuxer|FixupM3u8|FixupM4a|FixupStretched|ExtractAudio)\]/.test(line) && job.status !== 'merging') {
       Object.assign(job, { status: 'merging', progress: 0, stats: null, message: 'Joining video and audio…' });
       emit();
     }

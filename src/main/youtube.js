@@ -29,6 +29,7 @@ const requireVideo = (input) => {
 
 /** Quality ids look like "1080p" or "1080p60"; this is the yt-dlp format selector for one. */
 function formatSelector(formatId) {
+  if (formatId === 'audio_only') return 'ba[ext=m4a]/ba/b';
   const m = String(formatId).match(/^(\d+)p(\d+)?$/);
   if (!m) throw new Error('Please choose a quality.');
   const filter = `[height<=?${m[1]}]${m[2] ? `[fps<=?${m[2]}]` : ''}`;
@@ -56,7 +57,9 @@ function toFormats(info) {
       byLabel.set(label, { id: label, label, resolution: f.width ? `${f.width}x${f.height}` : null, height: f.height, fps: fps || null, kbps, source: false, audioOnly: false });
     }
   }
-  return [...byLabel.values()].sort((a, b) => b.height - a.height || (b.fps || 0) - (a.fps || 0));
+  const formats = [...byLabel.values()].sort((a, b) => b.height - a.height || (b.fps || 0) - (a.fps || 0));
+  if (bestAudio > 0) formats.push({ id: 'audio_only', label: 'Audio only', resolution: null, height: null, fps: null, kbps: Math.round(bestAudio), source: false, audioOnly: true });
+  return formats;
 }
 
 function toVideo(info) {
