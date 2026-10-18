@@ -29,6 +29,7 @@ On first start, the program checks for and downloads what it needs:
 | ffmpeg | ffmpeg isn't installed | `%LOCALAPPDATA%\Esmount VOD Downloader\tools\ffmpeg` |
 | twitch-dlp | Always (latest version, through `npx`) | npm's cache |
 | yt-dlp | For YouTube links; `yt-dlp.exe` is fetched from GitHub and updated on each start | `%LOCALAPPDATA%\Esmount VOD Downloader\tools\yt-dlp` |
+| TwitchDownloaderCLI | For Twitch chat; fetched from [lay295/TwitchDownloader](https://github.com/lay295/TwitchDownloader) releases and updated on each start | `%LOCALAPPDATA%\Esmount VOD Downloader\tools\TwitchDownloaderCLI` |
 
 Nothing is installed system-wide. Downloads are checked against their published checksums.
 
@@ -36,7 +37,7 @@ Nothing is installed system-wide. Downloads are checked against their published 
 
 1. **VOD link** – paste a link like `https://www.twitch.tv/videos/123456789`. A `?t=1h2m3s` in the link sets the start time.
 2. **Part to download** – drag the slider or type times (`1:23:45`, `83:45`, `1h23m45s`). **Whole VOD** resets it. Cuts are accurate to about 10 seconds.
-3. **Quality** – every quality Twitch offers for that VOD, with the source quality first.
+3. **Quality** – every quality Twitch offers for that VOD, with the source quality first. For Twitch you can also save the chat for the same part (next to the video, or chat only) as HTML, text or JSON.
 4. **Save to** – any folder, plus the **file name**. The name is filled in from the channel, title, time range and quality; edit it before downloading if you want something shorter. The program remembers your last folder and quality.
 
 Downloads run one at a time. Extra ones wait in a queue. If you stop a download, you can either save what was downloaded as a video, or start it again to continue where it left off.

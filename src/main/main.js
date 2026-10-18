@@ -144,7 +144,7 @@ function start() {
   function normalizeFileName(value) {
     const typed = String(value || '').trim();
     if (!typed) return null;
-    const name = U.sanitizeFileName(typed.replace(/[\\/]+/g, ' ').replace(/\.mp4$/i, '')).slice(0, 150).trim();
+    const name = U.sanitizeFileName(typed.replace(/[\\/]+/g, ' ').replace(/\.(mp4|m4a|chat\.(html|txt|json))$/i, '')).slice(0, 150).trim();
     if (!name) throw new Error('Please enter a file name.');
     return name;
   }
@@ -170,6 +170,9 @@ function start() {
     const atLiveEdge = Boolean(video.isLive) && (end === null || end >= video.duration - LIVE_EDGE_MARGIN);
     if (atLiveEdge) end = null;
     const followLive = atLiveEdge && Boolean(options.followLive);
+
+    const chatFormat = provider.source === 'twitch' && ['html', 'txt', 'json'].includes(options.chatFormat) ? options.chatFormat : null;
+    const chatOnly = Boolean(chatFormat && options.chatOnly);
 
     const customName = normalizeFileName(options.fileName);
     const dir = String(options.dir || '').trim();
@@ -197,8 +200,10 @@ function start() {
       isBest: format === formats[0],
       dir,
       isLive: video.isLive,
-      followLive,
-      stopAtLiveEdge: atLiveEdge && !followLive,
+      followLive: followLive && !chatOnly,
+      stopAtLiveEdge: atLiveEdge && !followLive && !chatOnly,
+      chatFormat,
+      chatOnly,
       customName,
     };
   }

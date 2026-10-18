@@ -12,6 +12,7 @@ module.exports = {
   NODE_DIR: path.join(DATA, 'tools', 'node'),
   FFMPEG_DIR: path.join(DATA, 'tools', 'ffmpeg'),
   YTDLP_DIR: path.join(DATA, 'tools', 'yt-dlp'),
+  CHAT_DIR: path.join(DATA, 'tools', 'TwitchDownloaderCLI'),
   TMP: path.join(DATA, 'tmp'),
   LOGS: path.join(DATA, 'logs'),
   SETTINGS_FILE: path.join(DATA, 'settings.json'),

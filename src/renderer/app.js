@@ -131,6 +131,7 @@ function resetVideo() {
   ui.loadToken++;
   Object.assign(ui, { video: null, formats: null, format: null, loadingId: null, duration: 0, start: 0, end: 0 });
   $('video-card').hidden = true;
+  updateChatChoice();
   $('video-skeleton').hidden = true;
   $('live-choice').hidden = true;
   setNameDirty(false);
@@ -162,6 +163,7 @@ async function loadVideo(url, id) {
   setNameDirty(false);
   $('file-name').value = '';
   $('video-card').hidden = true;
+  updateChatChoice();
   $('live-choice').hidden = true;
   $('video-skeleton').hidden = false;
   setUrlHint('Looking up the VOD…');
@@ -200,6 +202,16 @@ async function loadVideo(url, id) {
   updateForm();
 }
 
+// ---------------------------------------------------------------- chat (Twitch only)
+
+const isTwitch = () => Boolean(ui.video?.url?.includes('twitch.tv'));
+const chatMode = () => (isTwitch() ? document.querySelector('input[name="chat-mode"]:checked')?.value || 'none' : 'none');
+
+function updateChatChoice() {
+  $('chat-choice').hidden = !isTwitch();
+  $('chat-format-row').hidden = chatMode() === 'none';
+}
+
 function renderVideo(video) {
   $('video-skeleton').hidden = true;
   $('video-card').hidden = false;
@@ -211,6 +223,7 @@ function renderVideo(video) {
   $('video-title').textContent = video.title;
   const date = video.createdAt ? new Date(video.createdAt).toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' }) : '';
   $('video-sub').textContent = [video.channel, video.game, date].filter(Boolean).join(' · ');
+  updateChatChoice();
 }
 
 // ---------------------------------------------------------------- step 2: time range
@@ -373,6 +386,8 @@ function formOptions() {
     dir: $('dir').value.trim(),
     followLive: followLive(),
     fileName: ui.nameDirty ? $('file-name').value.trim() : null,
+    chatFormat: chatMode() === 'none' ? null : $('chat-format').value,
+    chatOnly: chatMode() === 'only',
   };
 }
 
@@ -602,7 +617,9 @@ function updateJobCard(card, job) {
     : whole
       ? 'Whole VOD'
       : `${clock(job.start)} → ${job.end === null ? clock(job.duration) : clock(job.end)}`;
-  r.sub.textContent = [job.channel, range, job.formatLabel].join(' · ');
+  r.sub.textContent = [job.channel, range, job.chatOnly ? 'Chat only' : job.formatLabel, job.chatFormat && !job.chatOnly ? '+ chat' : null]
+    .filter(Boolean)
+    .join(' · ');
 
   const recording = job.followLive && ['downloading', 'preparing'].includes(job.status);
   const [label, iconName] = recording ? ['Recording live', null] : STATUS_LABELS[job.status] || [job.status, null];
@@ -636,7 +653,13 @@ function updateJobCard(card, job) {
     job.status === 'error'
       ? job.error
       : job.status === 'done'
-        ? `${job.savedEarly ? 'Saved what was downloaded · ' : ''}${job.fileName}`
+        ? [
+            `${job.savedEarly ? 'Saved what was downloaded · ' : ''}${job.fileName}`,
+            job.chatPath && !job.chatOnly ? 'chat saved next to it' : null,
+            job.chatError ? `Chat failed: ${job.chatError}` : null,
+          ]
+            .filter(Boolean)
+            .join(' · ')
         : job.message;
   r.message.textContent = text || '';
   r.message.hidden = !text;
@@ -802,6 +825,13 @@ function init() {
     $(id).addEventListener('keydown', (e) => e.key === 'Enter' && (e.preventDefault(), $(id).blur()));
   }
   $('whole-vod').addEventListener('click', () => setRange(0, ui.duration));
+  for (const radio of document.querySelectorAll('input[name="chat-mode"]')) {
+    radio.addEventListener('change', () => {
+      updateChatChoice();
+      updateForm();
+    });
+  }
+  $('chat-format').addEventListener('change', updateForm);
   for (const radio of document.querySelectorAll('input[name="live-mode"]')) {
     radio.addEventListener('change', () => {
       renderSummary();

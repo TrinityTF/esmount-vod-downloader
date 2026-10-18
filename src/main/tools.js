@@ -4,6 +4,7 @@
 //   * ffmpeg                (downloaded if it is not installed)
 //   * twitch-dlp            (fetched once by npx so the first download starts fast)
 //   * yt-dlp                (yt-dlp.exe from GitHub, for YouTube links; kept up to date)
+//   * TwitchDownloaderCLI   (from GitHub, for downloading Twitch chat; kept up to date)
 // Downloaded tools go to %LOCALAPPDATA%\Esmount VOD Downloader\tools - nothing is installed system-wide.
 const fs = require('node:fs');
 const fsp = require('node:fs/promises');
@@ -40,6 +41,7 @@ const state = {
     ffmpeg: { label: 'ffmpeg', status: 'pending', detail: 'Waiting…', progress: null },
     twitchDlp: { label: 'twitch-dlp', status: 'pending', detail: 'Waiting…', progress: null },
     ytDlp: { label: 'yt-dlp (YouTube)', status: 'pending', detail: 'Waiting…', progress: null },
+    chat: { label: 'TwitchDownloaderCLI (chat)', status: 'pending', detail: 'Waiting…', progress: null },
   },
 };
 
@@ -48,6 +50,7 @@ let ffmpegDir = null; // added to PATH when we use our private ffmpeg copy
 let nodePromise = null;
 let twitchDlpPromise = null;
 let ytDlpPromise = null;
+let chatPromise = null;
 let allPromise = null;
 
 const emit = () => events.emit('change');
@@ -291,7 +294,69 @@ async function ensureYtDlp() {
 /** yt-dlp as it will be run (and shown to the user). */
 const ytDlpCommand = (args) => [ytDlpExe(), ...args].map(U.quoteArg).join(' ');
 
+// ---------------------------------------------------------------- TwitchDownloaderCLI (chat)
+
+const CHAT_RELEASES_URL = 'https://api.github.com/repos/lay295/TwitchDownloader/releases/latest';
+const CHAT_ASSET_REGEX = /^TwitchDownloaderCLI-.*-Windows-x64\.zip$/i;
+const chatExe = () => path.join(P.CHAT_DIR, 'TwitchDownloaderCLI.exe');
+const chatVersionFile = () => path.join(P.CHAT_DIR, 'version.txt');
+
+async function ensureChatTool() {
+  setStep('chat', { status: 'working', detail: 'Checking…', progress: null });
+  const installed = fs.existsSync(chatExe()) ? (await fsp.readFile(chatVersionFile(), 'utf8').catch(() => '')).trim() || 'unknown' : null;
+
+  let release = null;
+  try {
+    release = await U.fetchJson(CHAT_RELEASES_URL, { timeout: 30000 });
+  } catch (err) {
+    // Offline or rate limited: the copy we already have is good enough.
+    if (installed) return setStep('chat', { status: 'done', detail: installed });
+    throw new Error(`could not find the latest version on GitHub (${err.message})`);
+  }
+  const version = release.tag_name;
+  if (installed === version) return setStep('chat', { status: 'done', detail: version });
+
+  const asset = (release.assets || []).find((a) => CHAT_ASSET_REGEX.test(a.name));
+  if (!asset) {
+    if (installed) return setStep('chat', { status: 'done', detail: installed });
+    throw new Error('the Windows download was not found in the latest release');
+  }
+
+  const zip = path.join(P.TMP, 'TwitchDownloaderCLI.zip');
+  const extractDir = path.join(P.TMP, 'chat-extract');
+  await fsp.rm(extractDir, { recursive: true, force: true });
+  await U.downloadFile(asset.browser_download_url, zip, (done, total) =>
+    setStep('chat', { progress: total ? done / total : null, detail: `Downloading ${version}… ${mb(done)}${total ? ` of ${mb(total)}` : ''}` }),
+  );
+  setStep('chat', { detail: 'Unpacking…', progress: null });
+  await U.extractZip(zip, extractDir);
+  const entries = await fsp.readdir(extractDir, { recursive: true });
+  const exe = entries.find((f) => path.basename(f).toLowerCase() === 'twitchdownloadercli.exe');
+  if (!exe) throw new Error('TwitchDownloaderCLI.exe was not found in the download');
+  await fsp.mkdir(P.CHAT_DIR, { recursive: true });
+  await fsp.copyFile(path.join(extractDir, exe), chatExe());
+  await fsp.writeFile(chatVersionFile(), version);
+  await fsp.rm(extractDir, { recursive: true, force: true });
+  await fsp.rm(zip, { force: true });
+  setStep('chat', { status: 'done', detail: version, progress: null });
+}
+
+/** TwitchDownloaderCLI as it will be run (and shown to the user). */
+const chatCommand = (args) => [chatExe(), ...args].map(U.quoteArg).join(' ');
+
 // ---------------------------------------------------------------- public API
+
+/** Optional tools: if one cannot be set up, only the feature that needs it is unavailable. */
+function optionalTool(key, ensure, feature) {
+  const promise = ensure().catch((err) => {
+    U.log(`Setting up ${key} failed:`, err);
+    const message = `${err.message.charAt(0).toUpperCase()}${err.message.slice(1)}`;
+    setStep(key, { status: 'error', detail: message, progress: null });
+    throw new Error(`${feature} is unavailable: ${message}. Restart the app to try again.`);
+  });
+  promise.catch(() => {});
+  return promise;
+}
 
 function failStep(key) {
   return (err) => {
@@ -321,14 +386,9 @@ function start() {
     }
     return failStep('twitchDlp')(err);
   });
-  // YouTube support is optional: if yt-dlp cannot be set up, Twitch downloads still work.
-  ytDlpPromise = ensureYtDlp().catch((err) => {
-    U.log('Setting up yt-dlp failed:', err);
-    const message = `${err.message.charAt(0).toUpperCase()}${err.message.slice(1)}`;
-    setStep('ytDlp', { status: 'error', detail: message, progress: null });
-    throw new Error(`YouTube support is unavailable: ${message}. Restart the app to try again.`);
-  });
-  ytDlpPromise.catch(() => {});
+  // YouTube and chat are optional: if their tools cannot be set up, video downloads still work.
+  ytDlpPromise = optionalTool('ytDlp', ensureYtDlp, 'YouTube support');
+  chatPromise = optionalTool('chat', ensureChatTool, 'Chat downloading');
   allPromise = Promise.all([nodePromise, ffmpegPromise, twitchDlpPromise]).then(() => {
     state.status = 'ready';
     emit();
@@ -350,6 +410,9 @@ module.exports = {
   twitchDlpCommand,
   ytDlpExe,
   ytDlpCommand,
+  /** Resolves when TwitchDownloaderCLI can run; rejects with a readable message if it could not be set up. */
+  whenChatToolReady: () => chatPromise,
+  chatCommand,
   /** The ffmpeg to run directly (our private copy, or the one on this PC). */
   ffmpegPath: () => (ffmpegDir ? path.join(ffmpegDir, 'ffmpeg.exe') : 'ffmpeg'),
 };

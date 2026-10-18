@@ -1,7 +1,8 @@
 'use strict';
 // Download queue. For each download it runs
 //   npx --yes twitch-dlp@latest <VOD link> -f <quality> --download-sections "*<start>-<end>" -o "<file>"
-// in cmd.exe (one at a time; YouTube links run yt-dlp.exe instead) and turns the command's output into progress for the UI.
+// in cmd.exe (one at a time; YouTube links run yt-dlp.exe instead). Twitch chat is
+// downloaded with TwitchDownloaderCLI chatdownload, after the video or on its own. and turns the command's output into progress for the UI.
 const fs = require('node:fs');
 const fsp = require('node:fs/promises');
 const path = require('node:path');
@@ -17,6 +18,7 @@ const MIN_VIDEO_BYTES = 16 * 1024;
 const ACTIVE = new Set(['queued', 'preparing', 'downloading', 'merging']);
 const PROGRESS_REGEX = /\[download\]\s+([\d.,]+)%\s+of\s+~\s*(\S+)\s+at\s+(\S+)\s+ETA\s+(\S+)\s+\(frag\s+(\d+)\/(\d+)\)/;
 const YTDLP_PROGRESS_REGEX = /\[download\]\s+([\d.]+)%\s+of\s+~?\s*(\S+)\s+at\s+(\S+)\s+ETA\s+(\S+)/;
+const CHAT_STATUS_REGEX = /^\[STATUS\]\s*-\s*(.*?)\s*(\d+)%/;
 const FFMPEG_TIME_REGEX = /\btime=(\d+):(\d+):(\d+(?:\.\d+)?)/;
 
 const events = new EventEmitter();
@@ -47,12 +49,18 @@ function baseName(o) {
   const title = o.title.length > 70 ? `${o.title.slice(0, 70).trim()}…` : o.title;
   let name = `${o.channel} - ${title} [${o.source === 'youtube' ? '' : 'v'}${o.vodId}]`;
   if (!isWholeVod(o)) name += ` (${U.formatStamp(o.start)}-${o.end == null ? 'end' : U.formatStamp(o.end)})`;
-  if (!o.isBest) name += ` [${o.formatLabel}]`;
+  if (!o.isBest && !o.chatOnly) name += ` [${o.formatLabel}]`;
   return U.sanitizeFileName(name);
 }
 
-// YouTube audio-only downloads are saved as .m4a (everything else is .mp4).
-const extFor = (o) => (o.source === 'youtube' && o.format === 'audio_only' ? 'm4a' : 'mp4');
+// YouTube audio-only downloads are saved as .m4a, chat as .chat.<format>, everything else as .mp4.
+function extFor(o) {
+  if (o.chatOnly) return `chat.${o.chatFormat}`;
+  return o.source === 'youtube' && o.format === 'audio_only' ? 'm4a' : 'mp4';
+}
+
+/** Where the chat goes when it is downloaded next to the video: "<video name>.chat.<format>". */
+const chatPathFor = (job, videoPath) => videoPath.replace(/\.(mp4|m4a)$/i, '') + `.chat.${job.chatFormat}`;
 
 // twitch-dlp keeps "<file>-log.tsv" next to the output until a download fully finishes.
 const isUnfinished = (dir, fileName) => fs.existsSync(path.join(dir, `${fileName}-log.tsv`));
@@ -83,7 +91,17 @@ function buildYoutubeCommand(o, outputPath) {
   return tools.ytDlpCommand(args);
 }
 
+function buildChatCommand(o, outputPath) {
+  const args = ['chatdownload', '--id', o.vodId, '-o', outputPath, '--collision', 'Overwrite', '--banner', 'false'];
+  if (o.start > 0) args.push('-b', `${o.start}s`);
+  if (o.end != null) args.push('-e', `${o.end}s`);
+  // Emotes and badges go inside the file, so HTML chat shows them offline and JSON can be rendered later.
+  if (o.chatFormat !== 'txt') args.push('-E');
+  return tools.chatCommand(args);
+}
+
 function buildCommand(o, outputPath) {
+  if (o.chatOnly) return buildChatCommand(o, outputPath);
   if (o.source === 'youtube') return buildYoutubeCommand(o, outputPath);
   const args = [o.url, '-f', o.format];
   const section = sectionArg(o);
@@ -95,8 +113,11 @@ function buildCommand(o, outputPath) {
 /** What a download would run and save, for showing in the UI before it starts. */
 function preview(o) {
   const fileName = chooseFileName(o.dir, baseName(o), extFor(o));
+  const outputPath = path.join(o.dir, fileName);
+  let command = buildCommand(o, outputPath);
+  if (o.chatFormat && !o.chatOnly) command += `\n${buildChatCommand(o, chatPathFor(o, outputPath))}`;
   return {
-    command: buildCommand(o, path.join(o.dir, fileName)),
+    command,
     fileName,
     suggestedName: `${baseName({ ...o, customName: null })}.${extFor(o)}`,
   };
@@ -193,12 +214,14 @@ function readErrorLine(line) {
   if (/private video|members-only/i.test(line)) return 'This video is private or members-only.';
   if (/might be private/i.test(line)) return 'This VOD seems to be private, deleted, or sub-only.';
   if (/merging failed/i.test(line)) return 'Joining the video parts failed. See the output for details.';
+  if (/^\[ERROR\]/i.test(line)) return line.replace(/^\[ERROR\]\s*-?\s*/i, '');
   if (/^npm (error|ERR!)/i.test(line)) return 'npx could not run twitch-dlp. See the output for details.';
   return null;
 }
 
 async function runJob(job) {
   const internal = internals.get(job.id);
+  if (job.chatOnly) return runChatOnly(job);
   job.status = 'preparing';
   job.message = tools.getState().status === 'ready' ? 'Starting…' : 'Waiting for setup to finish…';
   emit();
@@ -334,6 +357,60 @@ async function runYoutubeJob(job, outputPath) {
   Object.assign(job, { status: 'done', progress: 1, message: '', outputPath, size: output.size, hasParts: false });
 }
 
+/**
+ * Downloads the chat with TwitchDownloaderCLI.
+ * Returns null when it worked, 'cancelled' when the user stopped it, or an error message.
+ */
+async function downloadChat(job, chatPath, { only }) {
+  const internal = internals.get(job.id);
+  Object.assign(job, { status: 'downloading', stats: null, message: 'Getting the chat downloader ready…' });
+  if (only) job.progress = 0;
+  emit();
+  try {
+    await tools.whenChatToolReady();
+  } catch (err) {
+    return err.message;
+  }
+  if (internal.cancelRequested) return 'cancelled';
+
+  job.message = 'Downloading chat…';
+  let errorMessage = null;
+  const onLine = (line) => {
+    const status = line.match(CHAT_STATUS_REGEX);
+    if (status) {
+      job.message = `Chat: ${status[1]} ${status[2]}%`;
+      if (only) job.progress = Number(status[2]) / 100;
+      return emit();
+    }
+    addLog(job, line);
+    errorMessage = readErrorLine(line) || errorMessage;
+  };
+  const exitCode = await runCommand(job, buildChatCommand(job, chatPath), onLine);
+  if (internal.cancelRequested || internal.saveRequested) return 'cancelled';
+  const output = await fsp.stat(chatPath).catch(() => null);
+  if (exitCode !== 0 || !output?.size) return errorMessage || `The chat download stopped with exit code ${exitCode}.`;
+  return null;
+}
+
+async function runChatOnly(job) {
+  await fsp.mkdir(job.dir, { recursive: true });
+  job.fileName ||= chooseFileName(job.dir, baseName(job), extFor(job));
+  const outputPath = path.join(job.dir, job.fileName);
+  const error = await downloadChat(job, outputPath, { only: true });
+  if (error === 'cancelled') return finishCancelled(job);
+  if (error) return Object.assign(job, { status: 'error', message: '', error });
+  const output = await fsp.stat(outputPath).catch(() => null);
+  Object.assign(job, { status: 'done', progress: 1, message: '', outputPath, chatPath: outputPath, size: output?.size || 0, hasParts: false });
+}
+
+/** After the video is saved: the chat for the same part of the VOD. A failed chat keeps the video. */
+async function runChatAfterVideo(job) {
+  const chatPath = chatPathFor(job, job.outputPath);
+  const result = await downloadChat(job, chatPath, { only: false });
+  const chatError = result === 'cancelled' ? 'Stopped before the chat was saved.' : result;
+  Object.assign(job, { status: 'done', progress: 1, message: '', chatPath: chatError ? null : chatPath, chatError });
+}
+
 /** Marks a download finished, cleaning up the parts the merge left behind. */
 async function finishSaved(job, outputPath, savedEarly) {
   await removePartFiles(job);
@@ -410,6 +487,7 @@ async function pump() {
   running = true;
   try {
     await runJob(job);
+    if (job.status === 'done' && job.chatFormat && !job.chatOnly && !job.chatPath) await runChatAfterVideo(job);
   } catch (err) {
     U.log(`Download ${job.id} failed:`, err);
     Object.assign(job, { status: 'error', error: err.message, message: '' });
@@ -444,6 +522,10 @@ function create(o) {
     isLive: Boolean(o.isLive),
     followLive: Boolean(o.followLive),
     stopAtLiveEdge: Boolean(o.stopAtLiveEdge),
+    chatFormat: o.chatFormat || null,
+    chatOnly: Boolean(o.chatOnly),
+    chatPath: null,
+    chatError: null,
     command: null,
     fileName: null,
     outputPath: null,
@@ -499,7 +581,7 @@ async function cancelAll() {
 function retry(id) {
   const job = find(id);
   if (!job || isActive(job)) return;
-  Object.assign(job, { status: 'queued', progress: 0, stats: null, message: '', error: null, hasParts: false, savedEarly: false, finishedAt: null });
+  Object.assign(job, { status: 'queued', progress: 0, stats: null, message: '', error: null, hasParts: false, savedEarly: false, finishedAt: null, chatPath: null, chatError: null });
   Object.assign(internals.get(id), { cancelRequested: false, saveRequested: false, saveOnly: false });
   emit();
   pump();

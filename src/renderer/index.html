@@ -122,6 +122,30 @@
           <div class="qualities" id="qualities" role="radiogroup">
             <p class="placeholder">Paste a link to see the available qualities.</p>
           </div>
+
+          <div class="live-choice chat-choice" id="chat-choice" hidden>
+            <div class="live-choice-head">Twitch chat</div>
+            <label class="live-option">
+              <input type="radio" name="chat-mode" value="none" checked>
+              <span><b>Video only</b></span>
+            </label>
+            <label class="live-option">
+              <input type="radio" name="chat-mode" value="with">
+              <span><b>Video and chat</b><small>The chat for the same part is saved next to the video.</small></span>
+            </label>
+            <label class="live-option">
+              <input type="radio" name="chat-mode" value="only">
+              <span><b>Chat only</b><small>Skips the video.</small></span>
+            </label>
+            <div class="chat-format" id="chat-format-row" hidden>
+              <label for="chat-format">Chat file</label>
+              <select id="chat-format">
+                <option value="html">Web page (.html) – read it in a browser, with emotes</option>
+                <option value="txt">Text (.txt) – plain chat log</option>
+                <option value="json">JSON (.json) – full data, for rendering chat later</option>
+              </select>
+            </div>
+          </div>
         </fieldset>
 
         <div class="step">
